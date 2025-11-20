@@ -1,0 +1,136 @@
+using System.Collections;
+using System.Collections.Generic;
+using UnityEngine;
+
+namespace OSK
+{
+    /// <summary>
+    /// RecycleViewAdapter: map ObservableCollection<TModel> -> pooled item views (prefab)
+    /// Usage:
+    /// - Attach to a GameObject with a Vertical Layout Group or Container (content)
+    /// - Set prefab (TView component implementing IRecyclerItem<TModel>) and content transform.
+    /// - Call SetSource(observableCollection).
+    /// example: public class PlayerListAdapter : RecycleViewAdapter<PlayerDataa, PlayerItemView>
+    /// </summary>
+    public class RecycleViewAdapter<TModel, TView> : MonoBehaviour
+        where TView : Component, IRecyclerItem<TModel>
+    {
+        [Header("Setup")] public TView ItemPrefab;
+        public Transform Content; // parent for item views
+
+        // Optional: limit number of active items at once (virtualization), not implemented full here
+        public int MaxActiveItems = 1000;
+
+        private ObservableCollection<TModel> _source;
+        private readonly List<TView> _active = new List<TView>();
+        private SimplePool<TView> _pool;
+
+        void Awake()
+        {
+            if (ItemPrefab == null) Debug.LogWarning("ItemPrefab is null on RecycleViewAdapter");
+            if (Content == null) Content = this.transform;
+            if (ItemPrefab != null)
+                _pool = new SimplePool<TView>(ItemPrefab, Content);
+        }
+
+        public void SetSource(ObservableCollection<TModel> source)
+        {
+            if (_source != null) UnbindSource();
+            _source = source;
+            if (_source != null) BindSource();
+            RefreshAll();
+        }
+
+        private void BindSource()
+        {
+            _source.OnAdd += OnAdd;
+            _source.OnRemove += OnRemove;
+            _source.OnReplace += OnReplace;
+            _source.OnReset += OnReset;
+            // optionally OnMove...
+        }
+
+        private void UnbindSource()
+        {
+            _source.OnAdd -= OnAdd;
+            _source.OnRemove -= OnRemove;
+            _source.OnReplace -= OnReplace;
+            _source.OnReset -= OnReset;
+        }
+
+        // Create item view at the end or at index
+        private void OnAdd(int index, TModel item)
+        {
+            // instantiate and insert at correct position
+            var view = _pool.Get();
+            _active.Insert(index, view);
+            view.transform.SetSiblingIndex(index);
+            view.gameObject.SetActive(true);
+            if (view is IRecyclerItem<TModel> r) r.SetData(item, index);
+            // update subsequent indices
+            UpdateIndicesFrom(index + 1);
+        }
+
+        private void OnRemove(int index, TModel item)
+        {
+            if (index < 0 || index >= _active.Count) return;
+            var v = _active[index];
+            _active.RemoveAt(index);
+            if (v is IRecyclerItem<TModel> r) r.Clear();
+            _pool.Release(v);
+            UpdateIndicesFrom(index);
+        }
+
+        private void OnReplace(int index, TModel oldItem, TModel newItem)
+        {
+            if (index < 0 || index >= _active.Count) return;
+            var v = _active[index];
+            if (v is IRecyclerItem<TModel> r) r.SetData(newItem, index);
+        }
+
+        private void OnReset()
+        {
+            ClearAll();
+        }
+
+        private void ClearAll()
+        {
+            for (int i = _active.Count - 1; i >= 0; --i)
+            {
+                var v = _active[i];
+                if (v is IRecyclerItem<TModel> r) r.Clear();
+                _pool.Release(v);
+            }
+
+            _active.Clear();
+        }
+
+        private void RefreshAll()
+        {
+            ClearAll();
+            if (_source == null) return;
+            for (int i = 0; i < _source.Count && i < MaxActiveItems; i++)
+            {
+                var view = _pool.Get();
+                _active.Add(view);
+                view.transform.SetSiblingIndex(i);
+                (view as IRecyclerItem<TModel>)?.SetData(_source[i], i);
+            }
+        }
+
+        private void UpdateIndicesFrom(int startIndex)
+        {
+            for (int i = startIndex; i < _active.Count; i++)
+            {
+                var v = _active[i];
+                (v as IRecyclerItem<TModel>)?.SetData(_source[i], i);
+            }
+        }
+
+        void OnDestroy()
+        {
+            if (_source != null) UnbindSource();
+            _pool?.Clear();
+        }
+    }
+}
