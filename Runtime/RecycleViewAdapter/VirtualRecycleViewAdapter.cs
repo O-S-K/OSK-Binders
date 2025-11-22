@@ -1,88 +1,140 @@
-// (COPY-PASTE toàn bộ) VirtualRecycleViewAdapter.cs
 using System;
 using System.Collections;
 using System.Collections.Generic;
 using DG.Tweening;
+using Sirenix.OdinInspector;
 using UnityEngine;
 using UnityEngine.UI;
 
 namespace OSK
 {
-    public enum JumpPosition { Top = 0, Center = 1, Bottom = 2 }
-    public enum ScrollDirection { Horizontal, Vertical }
+    public enum JumpPosition
+    {
+        Top = 0,
+        Center = 1,
+        Bottom = 2
+    }
+
+    public enum ScrollDirection
+    {
+        Horizontal,
+        Vertical
+    }
 
     [RequireComponent(typeof(ScrollRect))]
-    public class VirtualRecycleViewAdapter<TModel, TView> : MonoBehaviour
-        where TView : Component, IRecyclerItem<TModel>
+    [AddComponentMenu("OSK-AI/Recycle View/Virtual Recycle View Adapter")]
+    public class VirtualRecycleViewAdapter<TModel, TView> : MonoBehaviour where TView : Component, IRecyclerItem<TModel>
     {
-        [Header("Setup")] public TView ItemPrefab;
-        public RectTransform Content;
-        public ScrollRect ScrollRect;
+        [Title(" ------ Virtual Recycle View Adapter Settings ------ ", HorizontalLine = true)]
+        [ReadOnly, InfoBox("Not use Content Size Fitter and Layout Groups on Content RectTransform. " +
+                           "Item size and positions are managed by the adapter.", InfoMessageType.Warning), Space(10)]
+        [LabelText("Item Prefab")]
+        [HorizontalGroup("Left", Width = 300)]
+        [PreviewField(50, ObjectFieldAlignment.Left), HideLabel]
+        public TView ItemPrefab;
 
-        [Tooltip("Fixed height of each item in pixels.")]
+        [VerticalGroup("Right")]
+        [LabelWidth(90)]
+        [HorizontalGroup("Right/Row1", MarginLeft = 4)]
+        [LabelText("Item Height"), MinValue(1)]
         public float ItemHeight = 100f;
-        [Tooltip("Fixed width of each item in pixels (used in Horizontal mode).")]
+
+        [HorizontalGroup("Right/Row1")]
+        [LabelText("Item Width"), MinValue(1)]
+        [ShowIf("@Direction == ScrollDirection.Horizontal")]
         public float ItemWidth = 200f;
-        [Tooltip("Extra items rendered above/below (or left/right) viewport for smoothness).")]
+
+
+        // ---------- Buffer / Prewarm on one line ----------
+        [HorizontalGroup("RowA", MarginLeft = 6, PaddingRight = 8)] [LabelWidth(90)] [LabelText("Buffer"), MinValue(0)]
         public int Buffer = 2;
-        [Tooltip("Initial pool size")] public int Prewarm = 5;
 
-        [Header("Direction")] public ScrollDirection Direction = ScrollDirection.Vertical;
+        [HorizontalGroup("RowA")] [LabelText("Prewarm"), MinValue(0)]
+        public int Prewarm = 5;
 
-        [Header("Spacing")]
-        [Tooltip("Horizontal spacing / left padding in pixels")]
+
+        // ---------- Direction (single compact row) ----------
+        [HorizontalGroup("RowB", MarginLeft = 6)] [LabelWidth(90)] [LabelText("Scroll Direction")]
+        public ScrollDirection Direction = ScrollDirection.Vertical;
+
+
+        // ---------- Spacing X / Y on one line ----------
+        [HorizontalGroup("RowC", MarginLeft = 6)] [LabelWidth(90)] [LabelText("Spacing X")]
         public float SpacingX = 0f;
-        [Tooltip("Vertical spacing between items in pixels")]
+
+        [HorizontalGroup("RowC")] [LabelText("Spacing Y")]
         public float SpacingY = 0f;
 
-        [Header("Jump / Programmatic Scroll")]
-        [Tooltip("If true, user input (ScrollRect) will be disabled while performing programmatic jump.")]
+
+        // ---------- Jump settings compact ----------
+        [HorizontalGroup("RowD", MarginLeft = 6)] [LabelWidth(90)] [LabelText("Disable Input")]
         public bool DisableInputDuringJump = true;
-        [Tooltip("If true DOTween will use unscaled time for jumps.")]
+
+        [HorizontalGroup("RowD")] [LabelText("Use Unscaled")]
         public bool JumpUseUnscaledTime = true;
 
         // data sources (mutually exclusive modes)
         private ObservableCollection<TModel> _obsSource = null;
-        private IList<TModel> _listSource = null;            // for List<TModel> or TModel[]
-        private IList<TModel> _dictValues = null;            // for IDictionary mode (values in chosen order)
-        private IDictionary _rawDict = null;                 // original dictionary (non-generic reference)
-        private IList _dictKeyOrder = null;                  // ordered list of keys for dictionary mode (optional)
+        private IList<TModel> _listSource = null; // for List<TModel> or TModel[]
+        private IList<TModel> _dictValues = null; // for IDictionary mode (values in chosen order)
+        private IDictionary _rawDict = null; // original dictionary (non-generic reference)
+        private IList _dictKeyOrder = null; // ordered list of keys for dictionary mode (optional)
 
         // internals
         private SimplePool<TView> _pool;
         private readonly Dictionary<int, TView> _active = new Dictionary<int, TView>();
         private int _totalCount = 0;
-        private RectTransform _viewport;
 
         private Tweener _scrollTweener;
-
-        void Awake()
+        private ScrollRect _scrollRect;
+        private ScrollRect scrollRect
         {
-            if (ScrollRect == null) ScrollRect = GetComponent<ScrollRect>();
-            if (ScrollRect == null) Debug.LogError("VirtualRecycleViewAdapter requires a ScrollRect.");
-            if (Content == null) Content = ScrollRect.content;
-            if (Content == null) Debug.LogError("Content not assigned.");
-            _viewport = ScrollRect.viewport ?? (RectTransform)ScrollRect.transform;
-            if (ItemPrefab == null) Debug.LogError("ItemPrefab not assigned.");
-            if (ItemPrefab != null) _pool = new SimplePool<TView>(ItemPrefab, Content);
-
-            if (ScrollRect != null)
+            get
             {
-                ScrollRect.enabled = true;
-                ScrollRect.movementType = ScrollRect.MovementType.Clamped;
+                if (_scrollRect == null) _scrollRect = GetComponent<ScrollRect>();
+                return _scrollRect;
             }
         }
+        
+        private RectTransform viewport => scrollRect.viewport;
+        private RectTransform content => scrollRect.content;
+        
+        [Button("Add ScrollRect Component"), GUIColor(0.4f, 0.8f, 0.4f)]
+        [ShowIf( "MissingScrollRectComponent")]
+      
+        private void AddScrollRectComponent()
+        {
+            if (GetComponent<ScrollRect>() == null)
+            {
+                _scrollRect = gameObject.AddComponent<ScrollRect>();
+                Debug.Log("ScrollRect component added.");
+            }
+            else
+            {
+                Debug.LogWarning("ScrollRect component already exists.");
+            }
+        }
+        private bool MissingScrollRectComponent()
+        {
+            return GetComponent<ScrollRect>() == null;
+        }
+        protected virtual void Awake()
+        { 
+            if (ItemPrefab == null) Debug.LogError("ItemPrefab not assigned.");
+            if (ItemPrefab != null) _pool = new SimplePool<TView>(ItemPrefab, content);
+            enabled = true;
+        }
 
-        void Start()
+        protected virtual void Start()
         {
             PrewarmPool();
-            if (ScrollRect != null) ScrollRect.onValueChanged.AddListener(OnScroll);
+            scrollRect.onValueChanged.AddListener(OnScroll);
             UpdateContentSize();
             Refresh();
         }
 
-        void LateUpdate()
-        {
+        protected virtual void LateUpdate()
+        { 
             ClampContentPosition();
         }
 
@@ -101,7 +153,7 @@ namespace OSK
             Refresh();
         }
 
-        void BindSource()
+        private void BindSource()
         {
             if (_obsSource == null) return;
             _obsSource.OnAdd += OnAdd;
@@ -110,7 +162,7 @@ namespace OSK
             _obsSource.OnReset += OnReset;
         }
 
-        void UnbindSource()
+        private void UnbindSource()
         {
             if (_obsSource == null) return;
             _obsSource.OnAdd -= OnAdd;
@@ -125,7 +177,12 @@ namespace OSK
         public void SetData(IList<TModel> list)
         {
             // clear observable/dict modes
-            if (_obsSource != null) { UnbindSource(); _obsSource = null; }
+            if (_obsSource != null)
+            {
+                UnbindSource();
+                _obsSource = null;
+            }
+
             ClearDictMode();
 
             _listSource = list;
@@ -156,7 +213,12 @@ namespace OSK
             }
 
             // clear observable/list modes
-            if (_obsSource != null) { UnbindSource(); _obsSource = null; }
+            if (_obsSource != null)
+            {
+                UnbindSource();
+                _obsSource = null;
+            }
+
             ClearListMode();
 
             // store original dictionary in non-generic reference for internal use
@@ -172,6 +234,7 @@ namespace OSK
                     if (dict.TryGetValue(k, out var v)) vals.Add(v);
                     else vals.Add(default);
                 }
+
                 _dictValues = vals;
                 // store keys as non-generic IList for lookup
                 _dictKeyOrder = new List<TKey>(keyOrder) as IList;
@@ -185,6 +248,7 @@ namespace OSK
                 {
                     vals.Add(dict[k]);
                 }
+
                 _dictValues = vals;
             }
 
@@ -193,7 +257,7 @@ namespace OSK
             Refresh();
         }
 
-        void ClearDictMode()
+        private void ClearDictMode()
         {
             _rawDict = null;
             _dictValues = null;
@@ -201,26 +265,34 @@ namespace OSK
         }
 
         // Optional helper: Jump to item by dictionary key (generic)
-        public void JumpToKey<TKey>(TKey key, float duration = 0.3f, JumpPosition pos = JumpPosition.Top, Ease ease = Ease.OutSine)
+        public void JumpToKey<TKey>(TKey key, float duration = 0.3f, JumpPosition pos = JumpPosition.Top,
+            Ease ease = Ease.OutSine)
         {
             if (_dictKeyOrder == null) return;
             int idx = -1;
             for (int i = 0; i < _dictKeyOrder.Count; i++)
             {
-                if (Equals(_dictKeyOrder[i], key)) { idx = i; break; }
+                if (Equals(_dictKeyOrder[i], key))
+                {
+                    idx = i;
+                    break;
+                }
             }
+
             if (idx >= 0) JumpTo(idx, pos, duration, ease);
         }
-        
-        public bool IsNearEnd (float thresholdPercent = 0.8f)
+
+        public bool IsNearEnd(float thresholdPercent = 0.8f)
         {
-            if (Content == null || _viewport == null) return false;
+            if (content == null || viewport == null) return false;
             if (GetCount() == 0) return false;
 
-            float viewportSize = Direction == ScrollDirection.Vertical ? _viewport.rect.height : _viewport.rect.width;
-            float scrollPos = Direction == ScrollDirection.Vertical ? Content.anchoredPosition.y : -Content.anchoredPosition.x;
+            float viewportSize = Direction == ScrollDirection.Vertical ? viewport.rect.height : viewport.rect.width;
+            float scrollPos = Direction == ScrollDirection.Vertical
+                ? content.anchoredPosition.y
+                : -content.anchoredPosition.x;
 
-            float contentLen = Direction == ScrollDirection.Vertical ? Content.rect.height : Content.rect.width;
+            float contentLen = Direction == ScrollDirection.Vertical ? content.rect.height : content.rect.width;
             scrollPos = Mathf.Clamp(scrollPos, 0f, Mathf.Max(0f, contentLen - viewportSize));
 
             float itemFull = ItemFullSize();
@@ -251,6 +323,7 @@ namespace OSK
                     SetViewPosition(v, k + 1);
                 }
             }
+
             Refresh();
         }
 
@@ -261,6 +334,7 @@ namespace OSK
             {
                 Recycle(index);
             }
+
             var keys = new List<int>(_active.Keys);
             keys.Sort();
             foreach (var k in keys)
@@ -275,6 +349,7 @@ namespace OSK
                     (view as IRecyclerItem<TModel>)?.SetData(item, k - 1);
                 }
             }
+
             UpdateContentSize();
             Refresh();
         }
@@ -283,7 +358,7 @@ namespace OSK
         {
             if (_active.TryGetValue(index, out var v))
             {
-                (v as IRecyclerItem<TModel>)?.SetData(GetItem(index), index);
+                v?.SetData(GetItem(index), index);
             }
         }
 
@@ -296,13 +371,13 @@ namespace OSK
         }
 
         // ---------- ObservableCollection callbacks (existing) ----------
-        void OnAdd(int index, TModel item) => NotifyItemInserted(index);
-        void OnRemove(int index, TModel item) => NotifyItemRemoved(index);
-        void OnReplace(int index, TModel oldItem, TModel newItem) => NotifyItemChanged(index);
-        void OnReset() => NotifyDataSetChanged();
+        public void OnAdd(int index, TModel item) => NotifyItemInserted(index);
+        public void OnRemove(int index, TModel item) => NotifyItemRemoved(index);
+        public void OnReplace(int index, TModel oldItem, TModel newItem) => NotifyItemChanged(index);
+        public void OnReset() => NotifyDataSetChanged();
 
         // ---------- Internal helpers to unify data access ----------
-        int GetCount()
+        public int GetCount()
         {
             if (_obsSource != null) return _obsSource.Count;
             if (_listSource != null) return _listSource.Count;
@@ -310,7 +385,7 @@ namespace OSK
             return 0;
         }
 
-        TModel GetItem(int index)
+        private TModel GetItem(int index)
         {
             if (_obsSource != null) return _obsSource[index];
             if (_listSource != null) return _listSource[index];
@@ -319,7 +394,7 @@ namespace OSK
         }
 
         // ---------- pool / UI logic (unchanged but using GetCount/GetItem) ----------
-        void PrewarmPool()
+        private void PrewarmPool()
         {
             if (_pool == null) return;
             for (int i = 0; i < Prewarm; i++)
@@ -329,109 +404,111 @@ namespace OSK
             }
         }
 
-        void UpdateContentSize()
+        private void UpdateContentSize()
         {
             _totalCount = GetCount();
-            if (Content == null || _viewport == null) return;
+            if (content == null || viewport == null) return;
 
             float itemFull = ItemFullSize();
 
             if (Direction == ScrollDirection.Vertical)
             {
                 float desiredHeight = _totalCount * itemFull;
-                float viewH = _viewport.rect.height;
+                float viewH = viewport.rect.height;
 
                 if (_totalCount <= 0)
                 {
-                    Content.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, viewH);
-                    Content.anchoredPosition = Vector2.zero;
-                    if (ScrollRect != null) ScrollRect.vertical = false;
+                    content.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, viewH);
+                    content.anchoredPosition = Vector2.zero;
+                    scrollRect.vertical = false;
                 }
                 else if (desiredHeight <= viewH)
                 {
-                    Content.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, viewH);
-                    Content.anchoredPosition = Vector2.zero;
-                    if (ScrollRect != null) ScrollRect.vertical = false;
+                    content.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, viewH);
+                    content.anchoredPosition = Vector2.zero;
+                    scrollRect.vertical = false;
                 }
                 else
                 {
-                    Content.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, desiredHeight);
-                    if (ScrollRect != null) ScrollRect.vertical = true;
+                    content.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, desiredHeight);
+                    scrollRect.vertical = true;
                     ClampContentPosition();
                 }
 
-                Content.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, _viewport.rect.width);
+                content.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, viewport.rect.width);
             }
             else // Horizontal
             {
                 float desiredWidth = _totalCount * itemFull;
-                float viewW = _viewport.rect.width;
+                float viewW = viewport.rect.width;
 
                 if (_totalCount <= 0)
                 {
-                    Content.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, viewW);
-                    Content.anchoredPosition = Vector2.zero;
-                    if (ScrollRect != null) ScrollRect.horizontal = false;
+                    content.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, viewW);
+                    content.anchoredPosition = Vector2.zero;
+                    scrollRect.horizontal = false;
                 }
                 else if (desiredWidth <= viewW)
                 {
-                    Content.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, viewW);
-                    Content.anchoredPosition = Vector2.zero;
-                    if (ScrollRect != null) ScrollRect.horizontal = false;
+                    content.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, viewW);
+                    content.anchoredPosition = Vector2.zero;
+                    scrollRect.horizontal = false;
                 }
                 else
                 {
-                    Content.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, desiredWidth);
-                    if (ScrollRect != null) ScrollRect.horizontal = true;
+                    content.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, desiredWidth);
+                    scrollRect.horizontal = true;
                     ClampContentPosition();
                 }
 
-                Content.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, _viewport.rect.height);
+                content.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, viewport.rect.height);
             }
 
             Canvas.ForceUpdateCanvases();
         }
 
-        void ClampContentPosition()
+        private void ClampContentPosition()
         {
-            if (Content == null || _viewport == null) return;
+            if (content == null || viewport == null) return;
 
-            Vector2 ap = Content.anchoredPosition;
+            Vector2 ap = content.anchoredPosition;
 
             if (Direction == ScrollDirection.Vertical)
             {
-                float contentH = Content.rect.height;
-                float viewH = _viewport.rect.height;
+                float contentH = content.rect.height;
+                float viewH = viewport.rect.height;
                 float maxY = Mathf.Max(0f, contentH - viewH);
                 ap.y = Mathf.Clamp(ap.y, 0f, maxY);
             }
             else
             {
-                float contentW = Content.rect.width;
-                float viewW = _viewport.rect.width;
+                float contentW = content.rect.width;
+                float viewW = viewport.rect.width;
                 float maxX = Mathf.Max(0f, contentW - viewW);
                 ap.x = Mathf.Clamp(ap.x, -maxX, 0f);
             }
 
-            Content.anchoredPosition = ap;
+            content.anchoredPosition = ap;
         }
 
-        void OnScroll(Vector2 v)
+        private void OnScroll(Vector2 v)
         {
             ClampContentPosition();
             Refresh();
         }
 
-        void Refresh()
+        private void Refresh()
         {
-            if (GetCount() == 0 || Content == null || _viewport == null) return;
+            if (GetCount() == 0 || content == null || viewport == null) return;
 
             _totalCount = GetCount();
 
-            float viewportSize = Direction == ScrollDirection.Vertical ? _viewport.rect.height : _viewport.rect.width;
-            float scrollPos = Direction == ScrollDirection.Vertical ? Content.anchoredPosition.y : -Content.anchoredPosition.x;
+            float viewportSize = Direction == ScrollDirection.Vertical ? viewport.rect.height : viewport.rect.width;
+            float scrollPos = Direction == ScrollDirection.Vertical
+                ? content.anchoredPosition.y
+                : -content.anchoredPosition.x;
 
-            float contentLen = Direction == ScrollDirection.Vertical ? Content.rect.height : Content.rect.width;
+            float contentLen = Direction == ScrollDirection.Vertical ? content.rect.height : content.rect.width;
             scrollPos = Mathf.Clamp(scrollPos, 0f, Mathf.Max(0f, contentLen - viewportSize));
 
             float itemFull = ItemFullSize();
@@ -458,13 +535,13 @@ namespace OSK
             }
         }
 
-        void CreateForIndex(int index)
+        private void CreateForIndex(int index)
         {
             if (_pool == null) return;
             if (index < 0 || index >= GetCount()) return;
 
             var view = _pool.Get();
-            view.transform.SetParent(Content, false);
+            view.transform.SetParent(content, false);
 
             var rt = view.GetComponent<RectTransform>();
             if (rt != null)
@@ -494,7 +571,7 @@ namespace OSK
             (view as IRecyclerItem<TModel>)?.SetData(GetItem(index), index);
         }
 
-        void SetViewPosition(TView view, int index)
+        private void SetViewPosition(TView view, int index)
         {
             var rt = view.GetComponent<RectTransform>();
             if (rt == null) return;
@@ -520,7 +597,7 @@ namespace OSK
             }
         }
 
-        void Recycle(int index)
+        private void Recycle(int index)
         {
             if (_active.TryGetValue(index, out var v))
             {
@@ -530,7 +607,7 @@ namespace OSK
             }
         }
 
-        void ClearAll()
+        private void ClearAll()
         {
             var keys = new List<int>(_active.Keys);
             foreach (var k in keys) Recycle(k);
@@ -538,19 +615,26 @@ namespace OSK
         }
 
         protected virtual void OnDestroy()
-        {
+        { 
             if (_obsSource != null) UnbindSource();
             _pool?.Clear();
             _active.Clear();
-            if (_scrollTweener != null && _scrollTweener.IsActive()) { _scrollTweener.Kill(); _scrollTweener = null; }
+            if (_scrollTweener != null && _scrollTweener.IsActive())
+            {
+                _scrollTweener.Kill();
+                _scrollTweener = null;
+            }
         }
 
-        float ItemFullSize() { return (Direction == ScrollDirection.Vertical) ? (ItemHeight + SpacingY) : (ItemWidth + SpacingX); }
+        private float ItemFullSize()
+        {
+            return (Direction == ScrollDirection.Vertical) ? (ItemHeight + SpacingY) : (ItemWidth + SpacingX);
+        }
 
         // ----- Jump / DOTween scroll (unchanged API) -----
-        void JumpToIndex(int index, float duration, Ease jumpEase = Ease.OutSine, float normalizedViewportPos = 0f)
+        private void JumpToIndex(int index, float duration, Ease jumpEase = Ease.OutSine, float normalizedViewportPos = 0f)
         {
-            if (Content == null || _viewport == null) return;
+            if (content == null || viewport == null) return;
             if (GetCount() == 0) return;
 
             index = Mathf.Clamp(index, 0, GetCount() - 1);
@@ -560,59 +644,80 @@ namespace OSK
 
             float itemFull = ItemFullSize();
             float itemStart = index * itemFull;
-            float viewportSize = Direction == ScrollDirection.Vertical ? _viewport.rect.height : _viewport.rect.width;
+            float viewportSize = Direction == ScrollDirection.Vertical ? viewport.rect.height : viewport.rect.width;
             float itemSize = Direction == ScrollDirection.Vertical ? ItemHeight : ItemWidth;
             float offsetInViewport = Mathf.Clamp01(normalizedViewportPos) * Mathf.Max(0f, viewportSize - itemSize);
             float rawTargetScroll = itemStart - offsetInViewport;
 
-            float contentLen = Direction == ScrollDirection.Vertical ? Content.rect.height : Content.rect.width;
+            float contentLen = Direction == ScrollDirection.Vertical ? content.rect.height : content.rect.width;
             float maxScroll = Mathf.Max(0f, contentLen - viewportSize);
             float clampedScroll = Mathf.Clamp(rawTargetScroll, 0f, maxScroll);
 
             if (duration <= 0f)
             {
                 if (Direction == ScrollDirection.Vertical)
-                    Content.anchoredPosition = new Vector2(Content.anchoredPosition.x, clampedScroll);
+                    content.anchoredPosition = new Vector2(content.anchoredPosition.x, clampedScroll);
                 else
-                    Content.anchoredPosition = new Vector2(-clampedScroll, Content.anchoredPosition.y);
+                    content.anchoredPosition = new Vector2(-clampedScroll, content.anchoredPosition.y);
                 ClampContentPosition();
                 Refresh();
                 return;
             }
 
-            if (_scrollTweener != null && _scrollTweener.IsActive()) { _scrollTweener.Kill(); _scrollTweener = null; }
-
-            if (DisableInputDuringJump && ScrollRect != null)
+            if (_scrollTweener != null && _scrollTweener.IsActive())
             {
-                ScrollRect.enabled = false;
-                ScrollRect.velocity = Vector2.zero;
+                _scrollTweener.Kill();
+                _scrollTweener = null;
+            }
+
+            if (DisableInputDuringJump)
+            {
+                enabled = false;
+                scrollRect.velocity = Vector2.zero;
             }
 
             if (Direction == ScrollDirection.Vertical)
             {
-                _scrollTweener = DOTween.To(() => Content.anchoredPosition.y,
-                    y => Content.anchoredPosition = new Vector2(Content.anchoredPosition.x, y),
-                    clampedScroll, duration)
+                _scrollTweener = DOTween.To(() => content.anchoredPosition.y,
+                        y => content.anchoredPosition = new Vector2(content.anchoredPosition.x, y),
+                        clampedScroll, duration)
                     .SetEase(jumpEase)
-                    .OnUpdate(() => { ClampContentPosition(); Refresh(); })
-                    .OnComplete(() => { if (ScrollRect != null && DisableInputDuringJump) ScrollRect.enabled = true; _scrollTweener = null; });
+                    .OnUpdate(() =>
+                    {
+                        ClampContentPosition();
+                        Refresh();
+                    })
+                    .OnComplete(() =>
+                    {
+                        if (DisableInputDuringJump) enabled = true;
+                        _scrollTweener = null;
+                    });
 
                 if (JumpUseUnscaledTime) _scrollTweener.SetUpdate(true);
             }
             else
             {
-                _scrollTweener = DOTween.To(() => -Content.anchoredPosition.x,
-                    s => Content.anchoredPosition = new Vector2(-s, Content.anchoredPosition.y),
-                    clampedScroll, duration)
+                _scrollTweener = DOTween.To(() => -content.anchoredPosition.x,
+                        s => content.anchoredPosition = new Vector2(-s, content.anchoredPosition.y),
+                        clampedScroll, duration)
                     .SetEase(jumpEase)
-                    .OnUpdate(() => { ClampContentPosition(); Refresh(); })
-                    .OnComplete(() => { if (ScrollRect != null && DisableInputDuringJump) ScrollRect.enabled = true; _scrollTweener = null; });
+                    .OnUpdate(() =>
+                    {
+                        ClampContentPosition();
+                        Refresh();
+                    })
+                    .OnComplete(() =>
+                    {
+                        if (DisableInputDuringJump) enabled = true;
+                        _scrollTweener = null;
+                    });
 
                 if (JumpUseUnscaledTime) _scrollTweener.SetUpdate(true);
             }
         }
 
-        public void JumpTo(int index, JumpPosition position = JumpPosition.Top, float duration = 0.3f, Ease jumpEase = Ease.OutSine)
+        public void JumpTo(int index, JumpPosition position = JumpPosition.Top, float duration = 0.3f,
+            Ease jumpEase = Ease.OutSine)
         {
             float normalized = position == JumpPosition.Top ? 0f : (position == JumpPosition.Center ? 0.5f : 1f);
             JumpToIndex(index, duration, jumpEase, normalized);
@@ -623,13 +728,17 @@ namespace OSK
             JumpToIndex(index, duration, jumpEase, normalizedViewportPos);
         }
 
-        public void JumpToStart(float duration = 0.3f, Ease jumpEase = Ease.OutSine, JumpPosition pos = JumpPosition.Top) => JumpTo(0, pos, duration, jumpEase);
-        public void JumpToMiddle(float duration = 0.3f, Ease jumpEase = Ease.OutSine, JumpPosition pos = JumpPosition.Top)
+        public void JumpToStart(float duration = 0.3f, Ease jumpEase = Ease.OutSine,
+            JumpPosition pos = JumpPosition.Top) => JumpTo(0, pos, duration, jumpEase);
+
+        public void JumpToMiddle(float duration = 0.3f, Ease jumpEase = Ease.OutSine,
+            JumpPosition pos = JumpPosition.Top)
         {
             if (GetCount() == 0) return;
             int mid = Mathf.Clamp(GetCount() / 2, 0, GetCount() - 1);
             JumpTo(mid, pos, duration, jumpEase);
         }
+
         public void JumpToEnd(float duration = 0.3f, Ease jumpEase = Ease.OutSine, JumpPosition pos = JumpPosition.Top)
         {
             if (GetCount() == 0) return;

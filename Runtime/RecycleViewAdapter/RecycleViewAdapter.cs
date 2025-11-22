@@ -16,7 +16,7 @@ namespace OSK
         where TView : Component, IRecyclerItem<TModel>
     {
         [Header("Setup")] public TView ItemPrefab;
-        public Transform Content; // parent for item views
+        public Transform content; // parent for item views
 
         // Optional: limit number of active items at once (virtualization), not implemented full here
         public int MaxActiveItems = 1000;
@@ -25,12 +25,11 @@ namespace OSK
         private readonly List<TView> _active = new List<TView>();
         private SimplePool<TView> _pool;
 
-        void Awake()
+        protected virtual void Awake()
         {
             if (ItemPrefab == null) Debug.LogWarning("ItemPrefab is null on RecycleViewAdapter");
-            if (Content == null) Content = this.transform;
-            if (ItemPrefab != null)
-                _pool = new SimplePool<TView>(ItemPrefab, Content);
+            if (content == null) content = this.transform;
+            if (ItemPrefab != null) _pool = new SimplePool<TView>(ItemPrefab, content);
         }
 
         public void SetSource(ObservableCollection<TModel> source)
@@ -41,16 +40,15 @@ namespace OSK
             RefreshAll();
         }
 
-        private void BindSource()
+        protected void BindSource()
         {
             _source.OnAdd += OnAdd;
             _source.OnRemove += OnRemove;
             _source.OnReplace += OnReplace;
-            _source.OnReset += OnReset;
-            // optionally OnMove...
+            _source.OnReset += OnReset; 
         }
 
-        private void UnbindSource()
+        protected void UnbindSource()
         {
             _source.OnAdd -= OnAdd;
             _source.OnRemove -= OnRemove;
@@ -59,7 +57,7 @@ namespace OSK
         }
 
         // Create item view at the end or at index
-        private void OnAdd(int index, TModel item)
+        protected void OnAdd(int index, TModel item)
         {
             // instantiate and insert at correct position
             var view = _pool.Get();
@@ -71,7 +69,7 @@ namespace OSK
             UpdateIndicesFrom(index + 1);
         }
 
-        private void OnRemove(int index, TModel item)
+        protected void OnRemove(int index, TModel item)
         {
             if (index < 0 || index >= _active.Count) return;
             var v = _active[index];
@@ -81,19 +79,19 @@ namespace OSK
             UpdateIndicesFrom(index);
         }
 
-        private void OnReplace(int index, TModel oldItem, TModel newItem)
+        protected void OnReplace(int index, TModel oldItem, TModel newItem)
         {
             if (index < 0 || index >= _active.Count) return;
             var v = _active[index];
             if (v is IRecyclerItem<TModel> r) r.SetData(newItem, index);
         }
 
-        private void OnReset()
+        protected void OnReset()
         {
             ClearAll();
         }
 
-        private void ClearAll()
+        protected void ClearAll()
         {
             for (int i = _active.Count - 1; i >= 0; --i)
             {
@@ -105,7 +103,7 @@ namespace OSK
             _active.Clear();
         }
 
-        private void RefreshAll()
+        protected void RefreshAll()
         {
             ClearAll();
             if (_source == null) return;
@@ -127,7 +125,7 @@ namespace OSK
             }
         }
 
-        void OnDestroy()
+        protected void OnDestroy()
         {
             if (_source != null) UnbindSource();
             _pool?.Clear();

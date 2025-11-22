@@ -258,6 +258,7 @@ public class ExampleListController : MonoBehaviour
             _playersList.Add(p);
             Adapter.NotifyItemInserted(_playersList.Count - 1);
         }
+        JumpToIndex(idx);
     }
 
     void RemoveLast()
@@ -274,6 +275,7 @@ public class ExampleListController : MonoBehaviour
             _playersList.RemoveAt(last);
             Adapter.NotifyItemRemoved(last);
         }
+        JumpToIndex(last - 1);
     }
 
     void TryInsertAt()
@@ -297,6 +299,7 @@ public class ExampleListController : MonoBehaviour
             _playersList.Insert(idx, p);
             Adapter.NotifyItemInserted(idx);
         }
+        JumpToIndex(idx);
     }
 
     void TryRemoveAt()
@@ -339,6 +342,15 @@ public class ExampleListController : MonoBehaviour
         int clamped = Mathf.Clamp(idx, 0, Mathf.Max(0, ((Mode == DataMode.Observable) ? PlayersObs.Count : _playersList.Count) - 1));
         Adapter.JumpTo(clamped, pos, dur, JumpEase);
     }
+
+    private void JumpToIndex(int index)
+    {
+        if (Adapter == null) return;
+        int count = (Mode == DataMode.Observable) ? PlayersObs.Count : _playersList.Count;
+        int clamped = Mathf.Clamp(index, 0, Mathf.Max(0, count - 1));
+        Adapter.JumpTo(clamped, JumpPosition.Center, JumpDurationDefault, JumpEase);
+    }
+    
 
     float ParseDurationOrDefault(string s, float def)
     {
