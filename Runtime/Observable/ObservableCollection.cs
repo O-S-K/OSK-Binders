@@ -2,7 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 
-namespace OSK
+namespace OSK.Bindings
 {
     /// <summary>
     /// ObservableCollection<T>

@@ -1,8 +1,4 @@
-using System.Collections;
-using System.Collections.Generic;
-using UnityEngine;
-
-namespace OSK
+namespace OSK.Bindings
 {
     /// <summary>
     /// Interface cho item view: dùng RecycleViewAdapter để bind data.

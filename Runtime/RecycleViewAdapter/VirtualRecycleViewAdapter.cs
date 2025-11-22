@@ -6,7 +6,7 @@ using Sirenix.OdinInspector;
 using UnityEngine;
 using UnityEngine.UI;
 
-namespace OSK
+namespace OSK.Bindings
 {
     public enum JumpPosition
     {
@@ -81,7 +81,7 @@ namespace OSK
         private IList _dictKeyOrder = null; // ordered list of keys for dictionary mode (optional)
 
         // internals
-        private SimplePool<TView> _pool;
+        private PoolRecycleView<TView> _poolRecycleView;
         private readonly Dictionary<int, TView> _active = new Dictionary<int, TView>();
         private int _totalCount = 0;
 
@@ -121,7 +121,7 @@ namespace OSK
         protected virtual void Awake()
         { 
             if (ItemPrefab == null) Debug.LogError("ItemPrefab not assigned.");
-            if (ItemPrefab != null) _pool = new SimplePool<TView>(ItemPrefab, content);
+            if (ItemPrefab != null) _poolRecycleView = new PoolRecycleView<TView>(ItemPrefab, content);
             enabled = true;
         }
 
@@ -396,11 +396,11 @@ namespace OSK
         // ---------- pool / UI logic (unchanged but using GetCount/GetItem) ----------
         private void PrewarmPool()
         {
-            if (_pool == null) return;
+            if (_poolRecycleView == null) return;
             for (int i = 0; i < Prewarm; i++)
             {
-                var v = _pool.Get();
-                _pool.Release(v);
+                var v = _poolRecycleView.Get();
+                _poolRecycleView.Release(v);
             }
         }
 
@@ -537,10 +537,10 @@ namespace OSK
 
         private void CreateForIndex(int index)
         {
-            if (_pool == null) return;
+            if (_poolRecycleView == null) return;
             if (index < 0 || index >= GetCount()) return;
 
-            var view = _pool.Get();
+            var view = _poolRecycleView.Get();
             view.transform.SetParent(content, false);
 
             var rt = view.GetComponent<RectTransform>();
@@ -603,7 +603,7 @@ namespace OSK
             {
                 (v as IRecyclerItem<TModel>)?.Clear();
                 _active.Remove(index);
-                _pool.Release(v);
+                _poolRecycleView.Release(v);
             }
         }
 
@@ -617,7 +617,7 @@ namespace OSK
         protected virtual void OnDestroy()
         { 
             if (_obsSource != null) UnbindSource();
-            _pool?.Clear();
+            _poolRecycleView?.Clear();
             _active.Clear();
             if (_scrollTweener != null && _scrollTweener.IsActive())
             {
@@ -748,6 +748,6 @@ namespace OSK
 
         // public metrics
         public int ActiveCount => _active.Count;
-        public int PoolInactiveCount => _pool?.CountInactive ?? 0;
+        public int PoolInactiveCount => _poolRecycleView?.CountInactive ?? 0;
     }
 }

@@ -4,7 +4,7 @@ using UnityEngine;
 using System;
 using System.Reflection;
 
-namespace OSK
+namespace OSK.Bindings
 {
     /// <summary>
     /// PropertyDrawer cho Observable<T>, bổ sung hỗ trợ ObservableRangeAttribute cho Observable<float>.

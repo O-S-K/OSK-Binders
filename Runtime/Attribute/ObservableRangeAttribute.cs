@@ -1,6 +1,6 @@
 using UnityEngine;
 
-namespace OSK
+namespace OSK.Bindings
 {
 
     public class ObservableRangeAttribute : PropertyAttribute

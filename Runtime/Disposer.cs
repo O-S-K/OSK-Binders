@@ -1,19 +1,30 @@
 using System;
 
-public class Disposer : IDisposable
+namespace OSK.Bindings
 {
-    private readonly Action _dispose;
-    private bool _disposed;
+    #region Disposer
 
-    public Disposer(Action dispose)
+    public class Disposer : IDisposable
     {
-        _dispose = dispose;
+        private Action _onDispose;
+        private bool _disposed;
+
+        public Disposer(Action onDispose) => _onDispose = onDispose;
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            try
+            {
+                _onDispose?.Invoke();
+            }
+            finally
+            {
+                _onDispose = null;
+            }
+        }
     }
 
-    public void Dispose()
-    {
-        if (_disposed) return;
-        _disposed = true;
-        _dispose?.Invoke();
-    }
+    #endregion
 }

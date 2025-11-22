@@ -7,7 +7,7 @@ using System.Collections;
 using System.Collections.Generic;
 
 
-namespace OSK
+namespace OSK.Bindings
 {
 /// <summary>
 /// CustomEditor cho BaseObservableOwner (và các lớp kế thừa).

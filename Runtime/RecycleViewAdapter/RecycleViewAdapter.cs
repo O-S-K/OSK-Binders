@@ -2,7 +2,7 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
-namespace OSK
+namespace OSK.Bindings
 {
     /// <summary>
     /// RecycleViewAdapter: map ObservableCollection<TModel> -> pooled item views (prefab)
@@ -23,13 +23,13 @@ namespace OSK
 
         private ObservableCollection<TModel> _source;
         private readonly List<TView> _active = new List<TView>();
-        private SimplePool<TView> _pool;
+        private PoolRecycleView<TView> _poolRecycleView;
 
         protected virtual void Awake()
         {
             if (ItemPrefab == null) Debug.LogWarning("ItemPrefab is null on RecycleViewAdapter");
             if (content == null) content = this.transform;
-            if (ItemPrefab != null) _pool = new SimplePool<TView>(ItemPrefab, content);
+            if (ItemPrefab != null) _poolRecycleView = new PoolRecycleView<TView>(ItemPrefab, content);
         }
 
         public void SetSource(ObservableCollection<TModel> source)
@@ -60,7 +60,7 @@ namespace OSK
         protected void OnAdd(int index, TModel item)
         {
             // instantiate and insert at correct position
-            var view = _pool.Get();
+            var view = _poolRecycleView.Get();
             _active.Insert(index, view);
             view.transform.SetSiblingIndex(index);
             view.gameObject.SetActive(true);
@@ -75,7 +75,7 @@ namespace OSK
             var v = _active[index];
             _active.RemoveAt(index);
             if (v is IRecyclerItem<TModel> r) r.Clear();
-            _pool.Release(v);
+            _poolRecycleView.Release(v);
             UpdateIndicesFrom(index);
         }
 
@@ -97,7 +97,7 @@ namespace OSK
             {
                 var v = _active[i];
                 if (v is IRecyclerItem<TModel> r) r.Clear();
-                _pool.Release(v);
+                _poolRecycleView.Release(v);
             }
 
             _active.Clear();
@@ -109,7 +109,7 @@ namespace OSK
             if (_source == null) return;
             for (int i = 0; i < _source.Count && i < MaxActiveItems; i++)
             {
-                var view = _pool.Get();
+                var view = _poolRecycleView.Get();
                 _active.Add(view);
                 view.transform.SetSiblingIndex(i);
                 (view as IRecyclerItem<TModel>)?.SetData(_source[i], i);
@@ -128,7 +128,7 @@ namespace OSK
         protected void OnDestroy()
         {
             if (_source != null) UnbindSource();
-            _pool?.Clear();
+            _poolRecycleView?.Clear();
         }
     }
 }

@@ -2,7 +2,7 @@ using System;
 using System.Reflection;
 using UnityEngine;
 
-namespace OSK
+namespace OSK.Bindings
 {
     [ExecuteAlways]
     public abstract class BaseObservableOwner : MonoBehaviour, IObservableOwner
