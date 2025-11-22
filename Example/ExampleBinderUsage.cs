@@ -45,7 +45,12 @@ namespace OSK.Bindings
 
             public static GameObject CreateSphere()
             {
-                if (go == null) go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+                if (go == null)
+                {
+                    go = GameObject.Find("StaticGeneratedSphere");
+                    if (go == null)
+                        go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+                }
                 go.name = "StaticGeneratedSphere";
                 Debug.Log("[Static Factory] Created Sphere!");
                 return go;
@@ -57,7 +62,12 @@ namespace OSK.Bindings
         // Instance method for Method binding
         private GameObject CreateLocalObject()
         {
-            if (go == null) go = new GameObject("LocalInstanceCreated");
+            if (go == null)
+            {
+                go = GameObject.Find("LocalInstanceCreated");
+                if (go == null)
+                    go = new GameObject("LocalInstanceCreated");
+            }
             go.AddComponent<BoxCollider>();
             Debug.Log("[Instance Method] Created Local Object!");
             return go;

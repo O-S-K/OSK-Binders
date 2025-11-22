@@ -16,14 +16,11 @@ namespace OSK.Bindings.Example
     {
         public VirtualRecycleViewAdapter<PlayerDataa, PlayerItemView> Adapter;
 
-        [Tooltip("Initial number of items to populate")]
-        public int InitialCount = 100;
-
         [Tooltip("How many items to lazily add each load")]
         public int LazyLoadBatch = 50;
 
         [Tooltip("Optional hard cap for total items (0 = no cap)")]
-        public int MaxItems = 0;
+        public int MaxModelItems = 0;
 
         [Tooltip("Default duration (seconds) used by JumpTo when duration field is empty/zero")]
         public float JumpDurationDefault = 0.5f;
@@ -75,11 +72,7 @@ namespace OSK.Bindings.Example
             PlayersObs = new ObservableCollection<PlayerDataa>();
             // Plain list: separate copy
             _playersList = new List<PlayerDataa>();
-
-            int initialToAdd = InitialCount;
-            if (MaxItems > 0) initialToAdd = Mathf.Min(initialToAdd, MaxItems);
-
-            for (int i = 0; i < initialToAdd; i++)
+            for (int i = 0; i < MaxModelItems; i++)
             {
                 var p = GenerateRandomPlayer(i);
                 PlayersObs.Add(p);
@@ -106,7 +99,7 @@ namespace OSK.Bindings.Example
             if (!isLoadingMore && Adapter != null && Adapter.IsNearEnd(0.92f))
             {
                 int currentCount = (Mode == DataMode.Observable) ? PlayersObs.Count : _playersList.Count;
-                if (MaxItems <= 0 || currentCount < MaxItems)
+                if (MaxModelItems <= 0 || currentCount < MaxModelItems)
                 {
                     StartCoroutine(LoadMoreRoutine());
                 }
@@ -120,7 +113,7 @@ namespace OSK.Bindings.Example
 
             int start = (Mode == DataMode.Observable) ? PlayersObs.Count : _playersList.Count;
             int toAdd = LazyLoadBatch;
-            if (MaxItems > 0) toAdd = Mathf.Min(toAdd, MaxItems - start);
+            if (MaxModelItems > 0) toAdd = Mathf.Min(toAdd, MaxModelItems - start);
             if (toAdd <= 0)
             {
                 isLoadingMore = false;
@@ -146,6 +139,7 @@ namespace OSK.Bindings.Example
 
         void OnGUI()
         {
+            
             GUILayout.BeginArea(new Rect(10, 10, 420, 500), GUI.skin.box);
 
             int total = (Mode == DataMode.Observable) ? PlayersObs.Count : _playersList.Count;

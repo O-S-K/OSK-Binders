@@ -21,7 +21,16 @@ namespace OSK.Bindings
         Vertical
     }
 
+    public enum SnapTargetType
+    {
+        Nearest,
+        Previous,
+        Next
+    }
+
+
     [RequireComponent(typeof(ScrollRect))]
+    [RequireComponent(typeof(ScrollDragState))]
     [AddComponentMenu("OSK-AI/Recycle View/Virtual Recycle View Adapter")]
     public class VirtualRecycleViewAdapter<TModel, TView> : MonoBehaviour where TView : Component, IRecyclerItem<TModel>
     {
@@ -33,20 +42,28 @@ namespace OSK.Bindings
         [PreviewField(50, ObjectFieldAlignment.Left), HideLabel]
         public TView ItemPrefab;
 
+        
+        [HorizontalGroup("Right/Row0", MarginLeft = 4)] // Xếp đẹp tí
+        [LabelText("Use Prefab Size")]
+        public bool UseChildSize = false; // <--- Biến bạn cần
+
+        
+        [HorizontalGroup("Right/Row1")]
+        [LabelText("Item Width"), MinValue(1)]
+        [HideIf(nameof(UseChildSize))]
+        public float ItemWidth = 200f;
+
+        
         [VerticalGroup("Right")]
         [LabelWidth(90)]
         [HorizontalGroup("Right/Row1", MarginLeft = 4)]
         [LabelText("Item Height"), MinValue(1)]
+        [HideIf(nameof(UseChildSize))]
         public float ItemHeight = 100f;
-
-        [HorizontalGroup("Right/Row1")]
-        [LabelText("Item Width"), MinValue(1)]
-        [ShowIf("@Direction == ScrollDirection.Horizontal")]
-        public float ItemWidth = 200f;
-
 
         // ---------- Buffer / Prewarm on one line ----------
         [HorizontalGroup("RowA", MarginLeft = 6, PaddingRight = 8)] [LabelWidth(90)] [LabelText("Buffer"), MinValue(0)]
+        //buffer là số lượng item thêm vào trước và sau vùng nhìn thấy để tránh nhấp nháy khi cuộn nhanh
         public int Buffer = 2;
 
         [HorizontalGroup("RowA")] [LabelText("Prewarm"), MinValue(0)]
@@ -64,14 +81,35 @@ namespace OSK.Bindings
 
         [HorizontalGroup("RowC")] [LabelText("Spacing Y")]
         public float SpacingY = 0f;
-
-
-        // ---------- Jump settings compact ----------
+        
+                
+        [Title(" ------ Jump Settings ------ ", HorizontalLine = true)]
         [HorizontalGroup("RowD", MarginLeft = 6)] [LabelWidth(90)] [LabelText("Disable Input")]
         public bool DisableInputDuringJump = true;
 
         [HorizontalGroup("RowD")] [LabelText("Use Unscaled")]
         public bool JumpUseUnscaledTime = true;
+
+      
+
+        [Title(" ------ Infinite Settings ------ ", HorizontalLine = true)]
+        public bool IsInfinite = false; // Bật cái này lên để loop
+
+        [Title(" ------ Snap Settings ------ ", HorizontalLine = true)] [LabelWidth(120)]
+        public bool EnableSnap = false;
+
+        [ShowIf(nameof(EnableSnap))]
+        [LabelWidth(120)]
+        [Tooltip("Tốc độ Snap (đơn vị item/giây). Giá trị cao hơn = Snap nhanh hơn.")]
+        public float SnapSpeed = 0.25f;
+
+        [ShowIf(nameof(EnableSnap))] [LabelWidth(120)] [Tooltip("Đích đến khi cuộn dừng lại (Nearest, Previous/Next).")]
+        public SnapTargetType SnapTarget = SnapTargetType.Nearest; // NEW: Snap Target
+
+        [ShowIf(nameof(EnableSnap))]
+        [LabelWidth(120)]
+        [Tooltip("Tốc độ tối thiểu để cuộn được xem là Flick/Swipe, vượt qua SnapTarget=Nearest.")]
+        public float ThresholdSpeedToSnap = 1000f;
 
         // data sources (mutually exclusive modes)
         private ObservableCollection<TModel> _obsSource = null;
@@ -84,10 +122,12 @@ namespace OSK.Bindings
         private PoolRecycleView<TView> _poolRecycleView;
         private readonly Dictionary<int, TView> _active = new Dictionary<int, TView>();
         private int _totalCount = 0;
-
+        private ScrollDragState _scrollDragState;
         private Tweener _scrollTweener;
         private ScrollRect _scrollRect;
-        private ScrollRect scrollRect
+        private bool _isDragging = false;
+
+        public ScrollRect ScrollRect
         {
             get
             {
@@ -95,47 +135,146 @@ namespace OSK.Bindings
                 return _scrollRect;
             }
         }
-        
-        private RectTransform viewport => scrollRect.viewport;
-        private RectTransform content => scrollRect.content;
-        
-        [Button("Add ScrollRect Component"), GUIColor(0.4f, 0.8f, 0.4f)]
-        [ShowIf( "MissingScrollRectComponent")]
-      
-        private void AddScrollRectComponent()
-        {
-            if (GetComponent<ScrollRect>() == null)
-            {
-                _scrollRect = gameObject.AddComponent<ScrollRect>();
-                Debug.Log("ScrollRect component added.");
-            }
-            else
-            {
-                Debug.LogWarning("ScrollRect component already exists.");
-            }
-        }
-        private bool MissingScrollRectComponent()
-        {
-            return GetComponent<ScrollRect>() == null;
-        }
+
+        public RectTransform Viewport => ScrollRect.viewport;
+        public RectTransform Content => ScrollRect.content;
+
+
         protected virtual void Awake()
-        { 
-            if (ItemPrefab == null) Debug.LogError("ItemPrefab not assigned.");
-            if (ItemPrefab != null) _poolRecycleView = new PoolRecycleView<TView>(ItemPrefab, content);
+        {
+            _scrollDragState = GetComponent<ScrollDragState>();
+             if (UseChildSize)
+             {
+                 RectTransform prefabRect = ItemPrefab.GetComponent<RectTransform>();
+                 if (prefabRect != null)
+                 {
+                     ItemHeight = prefabRect.rect.height;
+                     ItemWidth = prefabRect.rect.width;
+                 }
+             }
+            if (ItemPrefab != null) _poolRecycleView = new PoolRecycleView<TView>(ItemPrefab, Content);
             enabled = true;
         }
+
 
         protected virtual void Start()
         {
             PrewarmPool();
-            scrollRect.onValueChanged.AddListener(OnScroll);
+            ScrollRect.onValueChanged.AddListener(OnScroll);
+            ScrollRect.movementType = IsInfinite ? ScrollRect.MovementType.Unrestricted : ScrollRect.MovementType.Clamped;
             UpdateContentSize();
             Refresh();
         }
 
         protected virtual void LateUpdate()
-        { 
+        {
             ClampContentPosition();
+
+            if (EnableSnap && !_scrollDragState.IsDragging && _scrollTweener == null &&
+                ScrollRect.velocity.magnitude < 100f)
+            {
+                TrySnapToCenter();
+            }
+        }
+
+        private void TrySnapToCenter()
+        {
+            // Nếu đang có tween chạy thì thôi, tránh xung đột
+            if (_scrollTweener != null && _scrollTweener.IsActive()) return;
+            if (GetCount() == 0 || Viewport == null) return;
+
+            float viewportSize = Direction == ScrollDirection.Vertical ? Viewport.rect.height : Viewport.rect.width;
+            float itemFull = ItemFullSize();
+
+            // Lấy vị trí cuộn hiện tại (đã chuẩn hóa dấu)
+            float currentScrollPos = Direction == ScrollDirection.Vertical
+                ? Content.anchoredPosition.y
+                : -Content.anchoredPosition.x;
+
+            float releaseSpeed = ScrollRect.velocity.magnitude;
+
+            float scrollCenterOffset = viewportSize / 2f - itemFull / 2f;
+            float indexAtCenterFloat = (currentScrollPos + scrollCenterOffset) / itemFull;
+            int nearestIndex = Mathf.RoundToInt(indexAtCenterFloat);
+            int targetIndex = nearestIndex;
+            
+            if (!IsInfinite)
+            {
+                int maxIndex = GetCount() - 1;
+                nearestIndex = Mathf.Clamp(nearestIndex, 0, maxIndex);
+                targetIndex = nearestIndex;
+            }
+
+            if (releaseSpeed > ThresholdSpeedToSnap)
+            {
+                bool isHorizontal = Direction == ScrollDirection.Horizontal;
+                bool isPositiveVelocity = isHorizontal ? ScrollRect.velocity.x > 0 : ScrollRect.velocity.y > 0;
+
+                if (SnapTarget == SnapTargetType.Previous ||
+                    (SnapTarget == SnapTargetType.Nearest && isPositiveVelocity))
+                {
+                    targetIndex = nearestIndex - 1;
+                }
+                else if (SnapTarget == SnapTargetType.Next ||
+                         (SnapTarget == SnapTargetType.Nearest && !isPositiveVelocity))
+                {
+                    targetIndex = nearestIndex + 1;
+                }
+            }
+
+            if (!IsInfinite)
+            {
+                targetIndex = Mathf.Clamp(targetIndex, 0, GetCount() - 1);
+            }
+            float targetScroll = (targetIndex * itemFull) - scrollCenterOffset;
+
+            if (!IsInfinite)
+            {
+                float contentLen = Direction == ScrollDirection.Vertical ? Content.rect.height : Content.rect.width;
+                float maxScroll = Mathf.Max(0f, contentLen - viewportSize);
+                targetScroll = Mathf.Clamp(targetScroll, 0f, maxScroll);
+            }
+
+            float snapDistance = Mathf.Abs(currentScrollPos - targetScroll);
+
+            if (snapDistance > 1f) 
+            {
+                float duration = Mathf.Clamp(snapDistance / (itemFull * SnapSpeed), 0.1f, 0.5f);
+                ScrollRect.velocity = Vector2.zero;
+                if (_scrollTweener != null) _scrollTweener.Kill();
+
+                if (Direction == ScrollDirection.Vertical)
+                {
+                    _scrollTweener = DOTween.To(
+                            () => Content.anchoredPosition.y,
+                            y =>
+                            {
+                                Content.anchoredPosition = new Vector2(Content.anchoredPosition.x, y);
+                                ClampContentPosition();
+                                Refresh();
+                            },
+                            targetScroll,
+                            duration)
+                        .SetEase(Ease.OutSine)
+                        .OnComplete(() => { _scrollTweener = null; });
+                }
+                else // Horizontal
+                {
+                    _scrollTweener = DOTween.To(
+                            () => -Content.anchoredPosition.x,
+                            x =>
+                            {
+                                Content.anchoredPosition =
+                                    new Vector2(-x, Content.anchoredPosition.y); 
+                                ClampContentPosition();
+                                Refresh();
+                            },
+                            targetScroll,
+                            duration)
+                        .SetEase(Ease.OutSine)
+                        .OnComplete(() => { _scrollTweener = null; });
+                }
+            }
         }
 
         // ---------- Public: support ObservableCollection (existing) ----------
@@ -284,15 +423,15 @@ namespace OSK.Bindings
 
         public bool IsNearEnd(float thresholdPercent = 0.8f)
         {
-            if (content == null || viewport == null) return false;
+            if (Content == null || Viewport == null) return false;
             if (GetCount() == 0) return false;
 
-            float viewportSize = Direction == ScrollDirection.Vertical ? viewport.rect.height : viewport.rect.width;
+            float viewportSize = Direction == ScrollDirection.Vertical ? Viewport.rect.height : Viewport.rect.width;
             float scrollPos = Direction == ScrollDirection.Vertical
-                ? content.anchoredPosition.y
-                : -content.anchoredPosition.x;
+                ? Content.anchoredPosition.y
+                : -Content.anchoredPosition.x;
 
-            float contentLen = Direction == ScrollDirection.Vertical ? content.rect.height : content.rect.width;
+            float contentLen = Direction == ScrollDirection.Vertical ? Content.rect.height : Content.rect.width;
             scrollPos = Mathf.Clamp(scrollPos, 0f, Mathf.Max(0f, contentLen - viewportSize));
 
             float itemFull = ItemFullSize();
@@ -407,61 +546,76 @@ namespace OSK.Bindings
         private void UpdateContentSize()
         {
             _totalCount = GetCount();
-            if (content == null || viewport == null) return;
+            if (Content == null || Viewport == null) return;
+
+            if (IsInfinite)
+            {
+                // BẮT BUỘC: Chế độ Unrestricted để kéo không bị giật lại
+                ScrollRect.movementType = ScrollRect.MovementType.Unrestricted;
+
+                // Set size tượng trưng để thuật toán tính toán đúng
+                float size = GetCount() * ItemFullSize();
+                if (Direction == ScrollDirection.Vertical)
+                    Content.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, size);
+                else
+                    Content.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, size);
+
+                return;
+            }
 
             float itemFull = ItemFullSize();
 
             if (Direction == ScrollDirection.Vertical)
             {
                 float desiredHeight = _totalCount * itemFull;
-                float viewH = viewport.rect.height;
+                float viewH = Viewport.rect.height;
 
                 if (_totalCount <= 0)
                 {
-                    content.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, viewH);
-                    content.anchoredPosition = Vector2.zero;
-                    scrollRect.vertical = false;
+                    Content.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, viewH);
+                    Content.anchoredPosition = Vector2.zero;
+                    ScrollRect.vertical = false;
                 }
                 else if (desiredHeight <= viewH)
                 {
-                    content.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, viewH);
-                    content.anchoredPosition = Vector2.zero;
-                    scrollRect.vertical = false;
+                    Content.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, viewH);
+                    Content.anchoredPosition = Vector2.zero;
+                    ScrollRect.vertical = false;
                 }
                 else
                 {
-                    content.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, desiredHeight);
-                    scrollRect.vertical = true;
+                    Content.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, desiredHeight);
+                    ScrollRect.vertical = true;
                     ClampContentPosition();
                 }
 
-                content.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, viewport.rect.width);
+                Content.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, Viewport.rect.width);
             }
             else // Horizontal
             {
                 float desiredWidth = _totalCount * itemFull;
-                float viewW = viewport.rect.width;
+                float viewW = Viewport.rect.width;
 
                 if (_totalCount <= 0)
                 {
-                    content.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, viewW);
-                    content.anchoredPosition = Vector2.zero;
-                    scrollRect.horizontal = false;
+                    Content.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, viewW);
+                    Content.anchoredPosition = Vector2.zero;
+                    ScrollRect.horizontal = false;
                 }
                 else if (desiredWidth <= viewW)
                 {
-                    content.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, viewW);
-                    content.anchoredPosition = Vector2.zero;
-                    scrollRect.horizontal = false;
+                    Content.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, viewW);
+                    Content.anchoredPosition = Vector2.zero;
+                    ScrollRect.horizontal = false;
                 }
                 else
                 {
-                    content.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, desiredWidth);
-                    scrollRect.horizontal = true;
+                    Content.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, desiredWidth);
+                    ScrollRect.horizontal = true;
                     ClampContentPosition();
                 }
 
-                content.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, viewport.rect.height);
+                Content.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, Viewport.rect.height);
             }
 
             Canvas.ForceUpdateCanvases();
@@ -469,26 +623,27 @@ namespace OSK.Bindings
 
         private void ClampContentPosition()
         {
-            if (content == null || viewport == null) return;
+            if (IsInfinite) return;
+            if (Content == null || Viewport == null) return;
 
-            Vector2 ap = content.anchoredPosition;
+            Vector2 ap = Content.anchoredPosition;
 
             if (Direction == ScrollDirection.Vertical)
             {
-                float contentH = content.rect.height;
-                float viewH = viewport.rect.height;
+                float contentH = Content.rect.height;
+                float viewH = Viewport.rect.height;
                 float maxY = Mathf.Max(0f, contentH - viewH);
                 ap.y = Mathf.Clamp(ap.y, 0f, maxY);
             }
             else
             {
-                float contentW = content.rect.width;
-                float viewW = viewport.rect.width;
+                float contentW = Content.rect.width;
+                float viewW = Viewport.rect.width;
                 float maxX = Mathf.Max(0f, contentW - viewW);
                 ap.x = Mathf.Clamp(ap.x, -maxX, 0f);
             }
 
-            content.anchoredPosition = ap;
+            Content.anchoredPosition = ap;
         }
 
         private void OnScroll(Vector2 v)
@@ -499,25 +654,40 @@ namespace OSK.Bindings
 
         private void Refresh()
         {
-            if (GetCount() == 0 || content == null || viewport == null) return;
+            if (GetCount() == 0 || Content == null || Viewport == null) return;
 
             _totalCount = GetCount();
-
-            float viewportSize = Direction == ScrollDirection.Vertical ? viewport.rect.height : viewport.rect.width;
-            float scrollPos = Direction == ScrollDirection.Vertical
-                ? content.anchoredPosition.y
-                : -content.anchoredPosition.x;
-
-            float contentLen = Direction == ScrollDirection.Vertical ? content.rect.height : content.rect.width;
-            scrollPos = Mathf.Clamp(scrollPos, 0f, Mathf.Max(0f, contentLen - viewportSize));
-
             float itemFull = ItemFullSize();
+
+            // Lấy kích thước viewport
+            float viewportSize = Direction == ScrollDirection.Vertical ? Viewport.rect.height : Viewport.rect.width;
+
+            // Lấy vị trí cuộn hiện tại
+            float scrollPos = Direction == ScrollDirection.Vertical
+                ? Content.anchoredPosition.y
+                : -Content.anchoredPosition.x;
+
+            // --- LOGIC 1: Chỉ chặn scrollPos nếu KHÔNG PHẢI Infinite ---
+            if (!IsInfinite)
+            {
+                float contentLen = Direction == ScrollDirection.Vertical ? Content.rect.height : Content.rect.width;
+                scrollPos = Mathf.Clamp(scrollPos, 0f, Mathf.Max(0f, contentLen - viewportSize));
+            }
+
+            // Tính toán index bắt đầu và kết thúc trong vùng nhìn thấy
             int firstVisible = Mathf.FloorToInt(scrollPos / itemFull) - Buffer;
             int lastVisible = Mathf.CeilToInt((scrollPos + viewportSize) / itemFull) + Buffer;
 
-            firstVisible = Mathf.Max(0, firstVisible);
-            lastVisible = Mathf.Min(Mathf.Max(0, _totalCount - 1), lastVisible);
+            // --- LOGIC 2: Chỉ giới hạn Index nếu KHÔNG PHẢI Infinite ---
+            // Nếu là Infinite, ta cho phép firstVisible âm (vd: -1, -2) 
+            // và lastVisible vượt quá tổng số (vd: 100, 101...)
+            if (!IsInfinite)
+            {
+                firstVisible = Mathf.Max(0, firstVisible);
+                lastVisible = Mathf.Min(Mathf.Max(0, _totalCount - 1), lastVisible);
+            }
 
+            // Thu hồi các item nằm ngoài vùng nhìn thấy
             var toRecycle = new List<int>();
             foreach (var kv in _active)
             {
@@ -527,9 +697,11 @@ namespace OSK.Bindings
 
             foreach (var idx in toRecycle) Recycle(idx);
 
+            // Tạo mới các item trong vùng nhìn thấy
             for (int i = firstVisible; i <= lastVisible; i++)
             {
-                if (i < 0 || i >= _totalCount) continue;
+                // Nếu là Infinite, i có thể là 100 (trong khi max là 99).
+                // Hàm CreateForIndex sẽ lo việc map 100 về 0.
                 if (!_active.ContainsKey(i))
                     CreateForIndex(i);
             }
@@ -538,37 +710,27 @@ namespace OSK.Bindings
         private void CreateForIndex(int index)
         {
             if (_poolRecycleView == null) return;
-            if (index < 0 || index >= GetCount()) return;
+
+            // Nếu KHÔNG phải Infinite thì chặn lỗi index như cũ
+            if (!IsInfinite && (index < 0 || index >= GetCount())) return;
 
             var view = _poolRecycleView.Get();
-            view.transform.SetParent(content, false);
+            view.transform.SetParent(Content, false);
 
-            var rt = view.GetComponent<RectTransform>();
-            if (rt != null)
-            {
-                if (Direction == ScrollDirection.Vertical)
-                {
-                    rt.anchorMin = new Vector2(0, 1);
-                    rt.anchorMax = new Vector2(1, 1);
-                    rt.pivot = new Vector2(0.5f, 1f);
-                    float y = -index * ItemFullSize();
-                    rt.anchoredPosition = new Vector2(SpacingX, y);
-                    rt.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, ItemHeight);
-                }
-                else
-                {
-                    rt.anchorMin = new Vector2(0, 1);
-                    rt.anchorMax = new Vector2(0, 1);
-                    rt.pivot = new Vector2(0f, 1f);
-                    float x = index * ItemFullSize();
-                    rt.anchoredPosition = new Vector2(x, -SpacingY);
-                    rt.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, ItemWidth);
-                    rt.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, ItemHeight);
-                }
-            }
+            // --- LOGIC LOOP DATA ---
+            int realCount = GetCount();
+
+            // Công thức chia lấy dư để map Index ảo về Index thật
+            // Vd: Index 100 -> Data 0. Index -1 -> Data 99.
+            int dataIndex = (index % realCount + realCount) % realCount;
+
+            // Đặt vị trí: Dùng 'index' (ảo) để xếp nó nằm tít bên dưới Player 99
+            SetViewPosition(view, index);
 
             _active[index] = view;
-            (view as IRecyclerItem<TModel>)?.SetData(GetItem(index), index);
+
+            // Đổ dữ liệu: Dùng 'dataIndex' (thật)
+            view?.SetData(GetItem(dataIndex), dataIndex);
         }
 
         private void SetViewPosition(TView view, int index)
@@ -578,22 +740,33 @@ namespace OSK.Bindings
 
             if (Direction == ScrollDirection.Vertical)
             {
-                rt.anchorMin = new Vector2(0, 1);
-                rt.anchorMax = new Vector2(1, 1);
-                rt.pivot = new Vector2(0.5f, 1);
-                float y = -index * ItemFullSize();
-                rt.anchoredPosition = new Vector2(SpacingX, y);
+                // SỬA LẠI: Không dùng (0,1) và (1,1) nữa vì nó là Stretch
+                // Dùng (0.5, 1) để neo vào GIỮA TRÊN
+                rt.anchorMin = new Vector2(0.5f, 1f);
+                rt.anchorMax = new Vector2(0.5f, 1f);
+                rt.pivot = new Vector2(0.5f, 1f);
+
+                float y = -index * (ItemHeight + SpacingY); // Đã cộng thêm SpacingY
+        
+                // X = 0 vì neo ở giữa, Y = vị trí tính toán
+                rt.anchoredPosition = new Vector2(0f, y); 
+        
                 rt.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, ItemHeight);
-            }
-            else
-            {
-                rt.anchorMin = new Vector2(0, 1);
-                rt.anchorMax = new Vector2(0, 1);
-                rt.pivot = new Vector2(0f, 1f);
-                float x = index * ItemFullSize();
-                rt.anchoredPosition = new Vector2(x, -SpacingY);
                 rt.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, ItemWidth);
-                rt.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, ItemHeight);
+            }
+            else // Horizontal
+            {
+                // SỬA LẠI: Dùng (0, 0.5) để neo vào TRÁI GIỮA
+                rt.anchorMin = new Vector2(0f, 0.5f);
+                rt.anchorMax = new Vector2(0f, 0.5f);
+                rt.pivot = new Vector2(0f, 0.5f);
+
+                float x = index * (ItemWidth + SpacingX); // Đã cộng thêm SpacingX
+        
+                rt.anchoredPosition = new Vector2(x, 0f);
+        
+                rt.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, ItemWidth);
+                rt.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, ItemHeight); // <--- Quan trọng: Ép Height
             }
         }
 
@@ -601,8 +774,14 @@ namespace OSK.Bindings
         {
             if (_active.TryGetValue(index, out var v))
             {
-                (v as IRecyclerItem<TModel>)?.Clear();
+                v?.Clear();
                 _active.Remove(index);
+                v.transform.localScale = Vector3.one;
+
+                // Reset Trạng thái Hiệu ứng (Scale và Alpha)
+                var cg = v.GetComponent<CanvasGroup>();
+                if (cg) cg.alpha = 1f;
+
                 _poolRecycleView.Release(v);
             }
         }
@@ -615,12 +794,13 @@ namespace OSK.Bindings
         }
 
         protected virtual void OnDestroy()
-        { 
+        {
             if (_obsSource != null) UnbindSource();
             _poolRecycleView?.Clear();
             _active.Clear();
             if (_scrollTweener != null && _scrollTweener.IsActive())
             {
+                ScrollRect.onValueChanged.RemoveAllListeners();
                 _scrollTweener.Kill();
                 _scrollTweener = null;
             }
@@ -632,9 +812,10 @@ namespace OSK.Bindings
         }
 
         // ----- Jump / DOTween scroll (unchanged API) -----
-        private void JumpToIndex(int index, float duration, Ease jumpEase = Ease.OutSine, float normalizedViewportPos = 0f)
+        private void JumpToIndex(int index, float duration, Ease jumpEase = Ease.OutSine,
+            float normalizedViewportPos = 0f)
         {
-            if (content == null || viewport == null) return;
+            if (Content == null || Viewport == null) return;
             if (GetCount() == 0) return;
 
             index = Mathf.Clamp(index, 0, GetCount() - 1);
@@ -644,21 +825,21 @@ namespace OSK.Bindings
 
             float itemFull = ItemFullSize();
             float itemStart = index * itemFull;
-            float viewportSize = Direction == ScrollDirection.Vertical ? viewport.rect.height : viewport.rect.width;
+            float viewportSize = Direction == ScrollDirection.Vertical ? Viewport.rect.height : Viewport.rect.width;
             float itemSize = Direction == ScrollDirection.Vertical ? ItemHeight : ItemWidth;
             float offsetInViewport = Mathf.Clamp01(normalizedViewportPos) * Mathf.Max(0f, viewportSize - itemSize);
             float rawTargetScroll = itemStart - offsetInViewport;
 
-            float contentLen = Direction == ScrollDirection.Vertical ? content.rect.height : content.rect.width;
+            float contentLen = Direction == ScrollDirection.Vertical ? Content.rect.height : Content.rect.width;
             float maxScroll = Mathf.Max(0f, contentLen - viewportSize);
             float clampedScroll = Mathf.Clamp(rawTargetScroll, 0f, maxScroll);
 
             if (duration <= 0f)
             {
                 if (Direction == ScrollDirection.Vertical)
-                    content.anchoredPosition = new Vector2(content.anchoredPosition.x, clampedScroll);
+                    Content.anchoredPosition = new Vector2(Content.anchoredPosition.x, clampedScroll);
                 else
-                    content.anchoredPosition = new Vector2(-clampedScroll, content.anchoredPosition.y);
+                    Content.anchoredPosition = new Vector2(-clampedScroll, Content.anchoredPosition.y);
                 ClampContentPosition();
                 Refresh();
                 return;
@@ -673,13 +854,13 @@ namespace OSK.Bindings
             if (DisableInputDuringJump)
             {
                 enabled = false;
-                scrollRect.velocity = Vector2.zero;
+                ScrollRect.velocity = Vector2.zero;
             }
 
             if (Direction == ScrollDirection.Vertical)
             {
-                _scrollTweener = DOTween.To(() => content.anchoredPosition.y,
-                        y => content.anchoredPosition = new Vector2(content.anchoredPosition.x, y),
+                _scrollTweener = DOTween.To(() => Content.anchoredPosition.y,
+                        y => Content.anchoredPosition = new Vector2(Content.anchoredPosition.x, y),
                         clampedScroll, duration)
                     .SetEase(jumpEase)
                     .OnUpdate(() =>
@@ -697,8 +878,8 @@ namespace OSK.Bindings
             }
             else
             {
-                _scrollTweener = DOTween.To(() => -content.anchoredPosition.x,
-                        s => content.anchoredPosition = new Vector2(-s, content.anchoredPosition.y),
+                _scrollTweener = DOTween.To(() => -Content.anchoredPosition.x,
+                        s => Content.anchoredPosition = new Vector2(-s, Content.anchoredPosition.y),
                         clampedScroll, duration)
                     .SetEase(jumpEase)
                     .OnUpdate(() =>
