@@ -2,7 +2,7 @@ using UnityEngine;
 using Sirenix.OdinInspector;
 using UnityEngine.UI;
 
-namespace OSK.Bindings
+namespace OSK.Bindings.Example
 {
     public class ExampleBinderUsage : MonoBehaviour
     {

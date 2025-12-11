@@ -3,7 +3,7 @@ using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 
-namespace OSK.Bindings
+namespace OSK.Bindings.Example
 {
     [System.Serializable]
     public class DataPlayerr

@@ -169,5 +169,5 @@ namespace OSK.Bindings
             }
         }
     }
-#endif
 }
+#endif

@@ -648,7 +648,6 @@ namespace OSK.Bindings
             return new Disposer(() => src.OnChanged -= apply);
         }
 
-        #endregion
-
+        #endregion 
     }
 }

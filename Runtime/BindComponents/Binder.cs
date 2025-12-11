@@ -8,6 +8,8 @@ namespace OSK.Bindings
 {
     public static class Binder
     {
+        public static bool IsLogEnabled = false;
+
         /// <summary>
         /// AutoBind fields annotated with [Bind] on target.
         /// By default will not overwrite non-null fields unless force==true or attribute.SearchOnlyIfNull=false.
@@ -16,14 +18,14 @@ namespace OSK.Bindings
         {
             if (target == null)
             {
-                Debug.LogWarning("[Binder] AutoBind called with null target.");
+                if (IsLogEnabled) Debug.LogWarning("[Binder] AutoBind called with null target.");
                 return;
             }
 
             var targetType = target.GetType();
             var fields = targetType.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
 
-            Debug.Log($"[Binder] AutoBind for {targetType.Name} - scanning {fields.Length} fields.");
+            if (IsLogEnabled) Debug.Log($"[Binder] AutoBind for {targetType.Name} - scanning {fields.Length} fields.");
 
             foreach (var f in fields)
             {
@@ -37,22 +39,32 @@ namespace OSK.Bindings
                 }
                 catch (Exception ex)
                 {
-                    Debug.LogError($"[Binder] ResolveField exception for '{f.Name}': {ex}");
+                    if (IsLogEnabled) Debug.LogError($"[Binder] ResolveField exception for '{f.Name}': {ex}");
                     resolved = null;
                 }
 
                 if (resolved == null)
                 {
-                    if (!attr.AllowNull)
-                        Debug.LogWarning($"[Binder] Could not bind '{f.Name}' on {targetType.Name} using {attr.From}.");
-                    else
-                        Debug.Log($"[Binder] '{f.Name}' resolved to null (allowed).");
+                    if (IsLogEnabled)
+                    {
+                        if (!attr.AllowNull)
+                            Debug.LogWarning($"[Binder] Could not bind '{f.Name}' on {targetType.Name} using {attr.From}.");
+                        else
+                            Debug.Log($"[Binder] '{f.Name}' resolved to null (allowed).");
+                    }
 
                     // if force and reference type -> clear
                     if (!f.FieldType.IsValueType)
                     {
-                        try { f.SetValue(target, null); } catch { }
+                        try
+                        {
+                            f.SetValue(target, null);
+                        }
+                        catch
+                        {
+                        }
                     }
+
                     continue;
                 }
 
@@ -63,7 +75,7 @@ namespace OSK.Bindings
                     if (f.FieldType.IsAssignableFrom(resolved.GetType()))
                     {
                         f.SetValue(target, resolved);
-                        Debug.Log($"[Binder] Bound '{f.Name}' <- {resolved.GetType().Name} on {targetType.Name}");
+                        if (IsLogEnabled) Debug.Log($"[Binder] Bound '{f.Name}' <- {resolved.GetType().Name} on {targetType.Name}");
                         continue;
                     }
 
@@ -73,7 +85,7 @@ namespace OSK.Bindings
                         if (f.FieldType == typeof(GameObject))
                         {
                             f.SetValue(target, go);
-                            Debug.Log($"[Binder] Bound '{f.Name}' as GameObject.");
+                            if (IsLogEnabled) Debug.Log($"[Binder] Bound '{f.Name}' as GameObject.");
                             continue;
                         }
 
@@ -81,7 +93,7 @@ namespace OSK.Bindings
                         if (comp != null)
                         {
                             f.SetValue(target, comp);
-                            Debug.Log($"[Binder] Bound '{f.Name}' <- {f.FieldType.Name} (from GameObject)");
+                            if (IsLogEnabled) Debug.Log($"[Binder] Bound '{f.Name}' <- {f.FieldType.Name} (from GameObject)");
                             continue;
                         }
                     }
@@ -90,7 +102,7 @@ namespace OSK.Bindings
                     if (resolved is Component compResolved && f.FieldType == typeof(GameObject))
                     {
                         f.SetValue(target, compResolved.gameObject);
-                        Debug.Log($"[Binder] Bound '{f.Name}' gameObject <- component {compResolved.GetType().Name}");
+                        if (IsLogEnabled) Debug.Log($"[Binder] Bound '{f.Name}' gameObject <- component {compResolved.GetType().Name}");
                         continue;
                     }
 
@@ -105,21 +117,21 @@ namespace OSK.Bindings
                             if (found != null)
                             {
                                 f.SetValue(target, found);
-                                Debug.Log($"[Binder] Bound interface '{f.Name}' -> {found.GetType().Name}");
+                                if (IsLogEnabled) Debug.Log($"[Binder] Bound interface '{f.Name}' -> {found.GetType().Name}");
                                 continue;
                             }
                         }
                     }
 
-                    Debug.LogWarning($"[Binder] Resolved value for '{f.Name}' ({resolved.GetType().Name}) is not assignable to {f.FieldType.Name}");
+                    if (IsLogEnabled) Debug.LogWarning($"[Binder] Resolved value for '{f.Name}' ({resolved.GetType().Name}) is not assignable to {f.FieldType.Name}");
                 }
                 catch (Exception ex)
                 {
-                    Debug.LogError($"[Binder] Failed to set '{f.Name}' on {targetType.Name}: {ex}");
+                    if (IsLogEnabled) Debug.LogError($"[Binder] Failed to set '{f.Name}' on {targetType.Name}: {ex}");
                 }
             }
 
-            Debug.Log($"[Binder] AutoBind finished for {targetType.Name}");
+            if (IsLogEnabled) Debug.Log($"[Binder] AutoBind finished for {targetType.Name}");
         }
 
         static object ResolveField(object owner, FieldInfo field, BindAttribute attr)
@@ -148,12 +160,22 @@ namespace OSK.Bindings
                         switch (attr.FindMode.Value)
                         {
                             case FindBy.Tag:
-                                if (string.IsNullOrEmpty(attr.Tag)) { Debug.LogWarning("[Binder] FindBy.Tag requires Tag."); return null; }
+                                if (string.IsNullOrEmpty(attr.Tag))
+                                {
+                                    if (IsLogEnabled) Debug.LogWarning("[Binder] FindBy.Tag requires Tag.");
+                                    return null;
+                                }
+
                                 var goTag = GameObject.FindWithTag(attr.Tag);
                                 if (goTag == null) return null;
                                 return ExtractFromGameObject(goTag, fieldType, attr);
                             case FindBy.Name:
-                                if (string.IsNullOrEmpty(attr.Name)) { Debug.LogWarning("[Binder] FindBy.Name requires Name."); return null; }
+                                if (string.IsNullOrEmpty(attr.Name))
+                                {
+                                    if (IsLogEnabled) Debug.LogWarning("[Binder] FindBy.Name requires Name.");
+                                    return null;
+                                }
+
                                 var goName = FindGameObjectByName(attr.Name);
                                 if (goName == null) return null;
                                 return ExtractFromGameObject(goName, fieldType, attr);
@@ -161,6 +183,7 @@ namespace OSK.Bindings
                                 return FindObjectOfType(fieldType, attr.Name);
                         }
                     }
+
                     // fallback: try first root object that contains matching component
                     var roots = ownerComp != null ? ownerComp.gameObject.scene.GetRootGameObjects() : UnityEngine.SceneManagement.SceneManager.GetActiveScene().GetRootGameObjects();
                     foreach (var r in roots)
@@ -168,24 +191,41 @@ namespace OSK.Bindings
                         var res = GetComponentInChildrenByTypeOrInterface(r, fieldType, attr.IncludeInactive);
                         if (res != null) return res;
                     }
+
                     return null;
 
                 case From.Resources:
-                    if (string.IsNullOrEmpty(attr.ResourcePath)) { Debug.LogWarning("[Binder] Resources requires ResourcePath."); return null; }
+                    if (string.IsNullOrEmpty(attr.ResourcePath))
+                    {
+                        if (IsLogEnabled) Debug.LogWarning("[Binder] Resources requires ResourcePath.");
+                        return null;
+                    }
+
                     return Resources.Load(attr.ResourcePath, fieldType);
 
                 case From.StaticMethod:
-                    if (attr.StaticType == null || string.IsNullOrEmpty(attr.MethodName)) { Debug.LogWarning("[Binder] StaticMethod requires StaticType and MethodName."); return null; }
+                    if (attr.StaticType == null || string.IsNullOrEmpty(attr.MethodName))
+                    {
+                        if (IsLogEnabled) Debug.LogWarning("[Binder] StaticMethod requires StaticType and MethodName.");
+                        return null;
+                    }
+
                     return InvokeStaticMethod(attr.StaticType, attr.MethodName, fieldType);
 
                 case From.Method:
-                    if (string.IsNullOrEmpty(attr.MethodName)) { Debug.LogWarning("[Binder] Method requires MethodName."); return null; }
+                    if (string.IsNullOrEmpty(attr.MethodName))
+                    {
+                        if (IsLogEnabled) Debug.LogWarning("[Binder] Method requires MethodName.");
+                        return null;
+                    }
+
                     // try owner first
                     if (owner != null)
                     {
                         var inst = InvokeInstanceMethod(owner, attr.MethodName, fieldType);
                         if (inst != null) return inst;
                     }
+
                     if (ownerComp != null)
                     {
                         foreach (var c in ownerComp.GetComponents<Component>())
@@ -195,6 +235,7 @@ namespace OSK.Bindings
                             if (r != null) return r;
                         }
                     }
+
                     return null;
 
                 default:
@@ -219,6 +260,7 @@ namespace OSK.Bindings
             {
                 if (go.name == name) return go;
             }
+
             return null;
         }
 
@@ -234,6 +276,7 @@ namespace OSK.Bindings
                 if (c != null && c.gameObject.name == nameFilter) return c;
                 if (o is GameObject go && go.name == nameFilter) return go;
             }
+
             return null;
         }
 
@@ -255,8 +298,9 @@ namespace OSK.Bindings
             }
             catch (Exception ex)
             {
-                Debug.LogError($"[Binder] Static method invoke error: {ex}");
+                if (IsLogEnabled) Debug.LogError($"[Binder] Static method invoke error: {ex}");
             }
+
             return null;
         }
 
@@ -279,8 +323,9 @@ namespace OSK.Bindings
             }
             catch (Exception ex)
             {
-                Debug.LogError($"[Binder] Instance method invoke error: {ex}");
+                if (IsLogEnabled) Debug.LogError($"[Binder] Instance method invoke error: {ex}");
             }
+
             return null;
         }
 
@@ -308,6 +353,7 @@ namespace OSK.Bindings
                     .FirstOrDefault(c => type.IsAssignableFrom(c.GetType()));
                 if (found != null) return found;
             }
+
             return null;
         }
 
@@ -320,10 +366,12 @@ namespace OSK.Bindings
                 if (t.childCount > 0) return t.GetChild(0).gameObject;
                 return null;
             }
+
             if (type == typeof(Transform))
             {
                 return go.GetComponentsInChildren<Transform>(includeInactive).FirstOrDefault();
             }
+
             if (typeof(Component).IsAssignableFrom(type))
             {
                 try
@@ -335,7 +383,10 @@ namespace OSK.Bindings
                         if (res != null) return res;
                     }
                 }
-                catch { /* fallback */ }
+                catch
+                {
+                    /* fallback */
+                }
 
                 var comps = go.GetComponentsInChildren<Component>(includeInactive);
                 foreach (var c in comps)
@@ -343,6 +394,7 @@ namespace OSK.Bindings
                     if (type.IsAssignableFrom(c.GetType())) return c;
                 }
             }
+
             return null;
         }
 
@@ -360,7 +412,10 @@ namespace OSK.Bindings
                     if (res != null) return res;
                 }
             }
-            catch { /* fallback */ }
+            catch
+            {
+                /* fallback */
+            }
 
             var t = go.transform.parent;
             while (t != null)
@@ -369,8 +424,10 @@ namespace OSK.Bindings
                 if (c != null) return c;
                 t = t.parent;
             }
+
             return null;
         }
+
         #endregion
     }
 }
