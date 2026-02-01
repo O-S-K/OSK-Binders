@@ -35,6 +35,8 @@ namespace OSK.Bindings.Example
 
         [Bind(From.Scene, FindBy.Name, Name = "ButtonClick")]
         public Button exampleButton;
+        
+        
 
         // ------------------------- DEMO METHODS --------------------------
 

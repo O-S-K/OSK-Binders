@@ -34,7 +34,7 @@ namespace OSK.Bindings
         public string ResourcePath;   // for Resources
         public Type StaticType;       // for StaticMethod
         public string MethodName;     // for StaticMethod or Method
-        public bool IncludeInactive = false;   // when searching children
+        public bool IncludeInactive = false;   // Include inactive GameObjects when searching in Children
         public bool AllowNull = false;         // if true, missing is tolerated
 
         // convenience ctors

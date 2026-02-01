@@ -1,5 +1,5 @@
 using System;
-using System.Linq;
+using System.Collections.Generic;
 using System.Reflection;
 using UnityEngine;
 using Object = UnityEngine.Object;
@@ -10,232 +10,179 @@ namespace OSK.Bindings
     {
         public static bool IsLogEnabled = false;
 
-        /// <summary>
-        /// AutoBind fields annotated with [Bind] on target.
-        /// By default will not overwrite non-null fields unless force==true or attribute.SearchOnlyIfNull=false.
-        /// </summary>
+        // --- OPTIMIZATION 1: CACHING REFLECTION ---
+        private static readonly Dictionary<Type, List<FieldBindData>> _typeCache = new Dictionary<Type, List<FieldBindData>>();
+
+        // --- OPTIMIZATION 2: SHARED BUFFER (NON-ALLOC) ---
+        // List này dùng chung để hứng kết quả tìm kiếm từ Unity, tránh tạo Array mới mỗi lần gọi
+        private static readonly List<Component> _sharedComponentList = new List<Component>(32);
+
+        private class FieldBindData
+        {
+            public FieldInfo Field;
+            public BindAttribute Attribute;
+            // Cache luôn logic check type để tránh gọi IsValueType nhiều lần
+            public bool IsValueType; 
+            public Type FieldType;
+        }
+
         public static void AutoBind(object target)
         {
-            if (target == null)
+            if (target == null) return;
+
+            var targetType = target.GetType();
+
+            if (!_typeCache.TryGetValue(targetType, out var bindList))
             {
-                if (IsLogEnabled) Debug.LogWarning("[Binder] AutoBind called with null target.");
+                bindList = new List<FieldBindData>();
+                var fields = targetType.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                foreach (var f in fields)
+                {
+                    var attr = f.GetCustomAttribute<BindAttribute>(true);
+                    if (attr != null)
+                    {
+                        bindList.Add(new FieldBindData { 
+                            Field = f, 
+                            Attribute = attr,
+                            IsValueType = f.FieldType.IsValueType,
+                            FieldType = f.FieldType
+                        });
+                    }
+                }
+                _typeCache[targetType] = bindList;
+            }
+
+            // Loop dùng for thay vì foreach để tránh iterator allocation (dù List.Enumerator là struct nhưng cẩn thận vẫn hơn)
+            var count = bindList.Count;
+            for (int i = 0; i < count; i++)
+            {
+                BindField(target, bindList[i]);
+            }
+        }
+
+        static void BindField(object target, FieldBindData data)
+        {
+            object resolved = ResolveField(target, data);
+
+            // 1. Check nếu không tìm thấy gì cả (Object null)
+            if (resolved == null)
+            {
+                if (!data.IsValueType && !data.Attribute.AllowNull)
+                {
+                    // Warning: Không tìm thấy Object nào
+                    Debug.LogWarning($"[Binder] ⚠️ Missing Object for field '{data.Field.Name}' on '{target.GetType().Name}'", target as Object);
+                }
                 return;
             }
 
-            var targetType = target.GetType();
-            var fields = targetType.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-
-            if (IsLogEnabled) Debug.Log($"[Binder] AutoBind for {targetType.Name} - scanning {fields.Length} fields.");
-
-            foreach (var f in fields)
+            try
             {
-                var attr = f.GetCustomAttribute<BindAttribute>(true);
-                if (attr == null) continue;
-
-                object resolved = null;
-                try
+                // 2. Check gán trực tiếp (Ví dụ field là Transform, resolved là Transform)
+                if (data.FieldType.IsAssignableFrom(resolved.GetType()))
                 {
-                    resolved = ResolveField(target, f, attr);
-                }
-                catch (Exception ex)
-                {
-                    if (IsLogEnabled) Debug.LogError($"[Binder] ResolveField exception for '{f.Name}': {ex}");
-                    resolved = null;
+                    data.Field.SetValue(target, resolved);
+                    return;
                 }
 
-                if (resolved == null)
+                // 3. Xử lý logic GameObject -> Component
+                if (resolved is GameObject go)
                 {
-                    if (IsLogEnabled)
+                    if (data.FieldType == typeof(GameObject))
                     {
-                        if (!attr.AllowNull)
-                            Debug.LogWarning($"[Binder] Could not bind '{f.Name}' on {targetType.Name} using {attr.From}.");
-                        else
-                            Debug.Log($"[Binder] '{f.Name}' resolved to null (allowed).");
+                        data.Field.SetValue(target, go);
+                        return;
                     }
-
-                    // if force and reference type -> clear
-                    if (!f.FieldType.IsValueType)
+                    
+                    var comp = GetComponentNonAlloc(go, data.FieldType);
+                    if (comp != null) 
                     {
-                        try
-                        {
-                            f.SetValue(target, null);
-                        }
-                        catch
-                        {
-                        }
+                        data.Field.SetValue(target, comp);
                     }
-
-                    continue;
+                    else
+                    {
+                        // --- ĐÂY LÀ CHỖ BẠN ĐANG THIẾU ---
+                        // Tìm thấy GameObject, nhưng không có Component cần thiết trên đó
+                        Debug.LogError($"[Binder] ❌ Found GameObject '{go.name}' but it MISSING component '{data.FieldType.Name}' for field '{data.Field.Name}'", target as Object);
+                    }
                 }
-
-                // try to assign value
-                try
+                else if (resolved is Component compResolved)
                 {
-                    // direct assign
-                    if (f.FieldType.IsAssignableFrom(resolved.GetType()))
+                    if (data.FieldType == typeof(GameObject))
                     {
-                        f.SetValue(target, resolved);
-                        if (IsLogEnabled) Debug.Log($"[Binder] Bound '{f.Name}' <- {resolved.GetType().Name} on {targetType.Name}");
-                        continue;
+                        data.Field.SetValue(target, compResolved.gameObject);
+                        return;
                     }
-
-                    // resolved GameObject -> field expects Component or GameObject
-                    if (resolved is GameObject go)
+                    
+                    // Interface binding
+                    if (data.FieldType.IsInterface)
                     {
-                        if (f.FieldType == typeof(GameObject))
-                        {
-                            f.SetValue(target, go);
-                            if (IsLogEnabled) Debug.Log($"[Binder] Bound '{f.Name}' as GameObject.");
-                            continue;
-                        }
-
-                        var comp = GetComponentByTypeOrInterface(go, f.FieldType);
-                        if (comp != null)
-                        {
-                            f.SetValue(target, comp);
-                            if (IsLogEnabled) Debug.Log($"[Binder] Bound '{f.Name}' <- {f.FieldType.Name} (from GameObject)");
-                            continue;
-                        }
+                         var comp = GetComponentNonAlloc(compResolved.gameObject, data.FieldType);
+                         if (comp != null) 
+                         {
+                             data.Field.SetValue(target, comp);
+                         }
+                         else
+                         {
+                             // Tìm thấy component cha/con, nhưng không implement Interface cần thiết
+                             Debug.LogError($"[Binder] ❌ Found object '{compResolved.name}' but missing Interface '{data.FieldType.Name}' for field '{data.Field.Name}'", target as Object);
+                         }
                     }
-
-                    // resolved Component -> field expects GameObject
-                    if (resolved is Component compResolved && f.FieldType == typeof(GameObject))
-                    {
-                        f.SetValue(target, compResolved.gameObject);
-                        if (IsLogEnabled) Debug.Log($"[Binder] Bound '{f.Name}' gameObject <- component {compResolved.GetType().Name}");
-                        continue;
-                    }
-
-                    // if field is interface, try find component implementing that interface (in owner)
-                    if (f.FieldType.IsInterface)
-                    {
-                        var ownerComp = target as Component;
-                        if (ownerComp != null)
-                        {
-                            var found = ownerComp.GetComponentsInChildren<Component>(attr.IncludeInactive)
-                                .FirstOrDefault(c => f.FieldType.IsAssignableFrom(c.GetType()));
-                            if (found != null)
-                            {
-                                f.SetValue(target, found);
-                                if (IsLogEnabled) Debug.Log($"[Binder] Bound interface '{f.Name}' -> {found.GetType().Name}");
-                                continue;
-                            }
-                        }
-                    }
-
-                    if (IsLogEnabled) Debug.LogWarning($"[Binder] Resolved value for '{f.Name}' ({resolved.GetType().Name}) is not assignable to {f.FieldType.Name}");
-                }
-                catch (Exception ex)
-                {
-                    if (IsLogEnabled) Debug.LogError($"[Binder] Failed to set '{f.Name}' on {targetType.Name}: {ex}");
                 }
             }
-
-            if (IsLogEnabled) Debug.Log($"[Binder] AutoBind finished for {targetType.Name}");
+            catch (Exception ex)
+            {
+                Debug.LogError($"[Binder] ☠️ Crash setting {data.Field.Name}: {ex}", target as Object);
+            }
         }
 
-        static object ResolveField(object owner, FieldInfo field, BindAttribute attr)
+        static object ResolveField(object owner, FieldBindData data)
         {
             var ownerComp = owner as Component;
-            var fieldType = field.FieldType;
+            GameObject ownerGo = ownerComp != null ? ownerComp.gameObject : null;
+            var attr = data.Attribute;
+            var type = data.FieldType;
 
             switch (attr.From)
             {
                 case From.Self:
-                    if (ownerComp != null) return GetComponentByTypeOrInterface(ownerComp.gameObject, fieldType);
-                    return null;
+                    return ownerGo ? GetComponentNonAlloc(ownerGo, type) : null;
 
                 case From.Children:
-                    if (ownerComp != null) return GetComponentInChildrenByTypeOrInterface(ownerComp.gameObject, fieldType, attr.IncludeInactive);
-                    return null;
+                    // Sử dụng hàm tìm kiếm Non-Alloc
+                    return ownerGo ? GetComponentInChildrenNonAlloc(ownerGo, type, attr.IncludeInactive) : null;
 
                 case From.Parent:
-                    if (ownerComp != null) return GetComponentInParentByTypeOrInterface(ownerComp.gameObject, fieldType);
-                    return null;
+                    return ownerGo ? GetComponentInParentNonAlloc(ownerGo, type) : null;
 
                 case From.Scene:
-                    // use FindBy if provided:
-                    if (attr.FindMode.HasValue)
+                    if (attr.FindMode == FindBy.Tag && !string.IsNullOrEmpty(attr.Tag))
                     {
-                        switch (attr.FindMode.Value)
-                        {
-                            case FindBy.Tag:
-                                if (string.IsNullOrEmpty(attr.Tag))
-                                {
-                                    if (IsLogEnabled) Debug.LogWarning("[Binder] FindBy.Tag requires Tag.");
-                                    return null;
-                                }
-
-                                var goTag = GameObject.FindWithTag(attr.Tag);
-                                if (goTag == null) return null;
-                                return ExtractFromGameObject(goTag, fieldType, attr);
-                            case FindBy.Name:
-                                if (string.IsNullOrEmpty(attr.Name))
-                                {
-                                    if (IsLogEnabled) Debug.LogWarning("[Binder] FindBy.Name requires Name.");
-                                    return null;
-                                }
-
-                                var goName = FindGameObjectByName(attr.Name);
-                                if (goName == null) return null;
-                                return ExtractFromGameObject(goName, fieldType, attr);
-                            case FindBy.Type:
-                                return FindObjectOfType(fieldType, attr.Name);
-                        }
+                        var goTag = GameObject.FindWithTag(attr.Tag);
+                        return ExtractFromGameObject(goTag, type);
+                    }
+                    
+                    if (attr.FindMode == FindBy.Name && !string.IsNullOrEmpty(attr.Name))
+                    {
+                        var goName = GameObject.Find(attr.Name);
+                        return ExtractFromGameObject(goName, type);
                     }
 
-                    // fallback: try first root object that contains matching component
-                    var roots = ownerComp != null ? ownerComp.gameObject.scene.GetRootGameObjects() : UnityEngine.SceneManagement.SceneManager.GetActiveScene().GetRootGameObjects();
-                    foreach (var r in roots)
+                    if (attr.FindMode == FindBy.Type)
                     {
-                        var res = GetComponentInChildrenByTypeOrInterface(r, fieldType, attr.IncludeInactive);
-                        if (res != null) return res;
+                        return Object.FindObjectOfType(type); // Hàm này của Unity vẫn sẽ alloc, ko tránh được nếu dùng From.Scene
                     }
-
                     return null;
 
                 case From.Resources:
-                    if (string.IsNullOrEmpty(attr.ResourcePath))
-                    {
-                        if (IsLogEnabled) Debug.LogWarning("[Binder] Resources requires ResourcePath.");
-                        return null;
-                    }
-
-                    return Resources.Load(attr.ResourcePath, fieldType);
+                    return Resources.Load(attr.ResourcePath, type);
 
                 case From.StaticMethod:
-                    if (attr.StaticType == null || string.IsNullOrEmpty(attr.MethodName))
+                    if (attr.StaticType != null && !string.IsNullOrEmpty(attr.MethodName))
                     {
-                        if (IsLogEnabled) Debug.LogWarning("[Binder] StaticMethod requires StaticType and MethodName.");
-                        return null;
+                        // Reflection Invoke vẫn có overhead nhỏ, nhưng ít dùng
+                        var m = attr.StaticType.GetMethod(attr.MethodName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+                        if (m != null) return m.Invoke(null, null);
                     }
-
-                    return InvokeStaticMethod(attr.StaticType, attr.MethodName, fieldType);
-
-                case From.Method:
-                    if (string.IsNullOrEmpty(attr.MethodName))
-                    {
-                        if (IsLogEnabled) Debug.LogWarning("[Binder] Method requires MethodName.");
-                        return null;
-                    }
-
-                    // try owner first
-                    if (owner != null)
-                    {
-                        var inst = InvokeInstanceMethod(owner, attr.MethodName, fieldType);
-                        if (inst != null) return inst;
-                    }
-
-                    if (ownerComp != null)
-                    {
-                        foreach (var c in ownerComp.GetComponents<Component>())
-                        {
-                            if (c == ownerComp) continue;
-                            var r = InvokeInstanceMethod(c, attr.MethodName, fieldType);
-                            if (r != null) return r;
-                        }
-                    }
-
                     return null;
 
                 default:
@@ -243,189 +190,89 @@ namespace OSK.Bindings
             }
         }
 
-        #region Resolve Helpers
+        #region Zero-Alloc Helpers
 
-        static object ExtractFromGameObject(GameObject go, Type desiredType, BindAttribute attr)
+        // Hàm thay thế GetComponent để đảm bảo không sinh rác
+        static object GetComponentNonAlloc(GameObject go, Type type)
         {
             if (go == null) return null;
-            if (desiredType == typeof(GameObject)) return go;
-            if (desiredType == typeof(Transform)) return go.transform;
-            return GetComponentByTypeOrInterface(go, desiredType);
-        }
-
-        static GameObject FindGameObjectByName(string name)
-        {
-            var all = Object.FindObjectsOfType<GameObject>();
-            foreach (var go in all)
-            {
-                if (go.name == name) return go;
-            }
-
-            return null;
-        }
-
-        static object FindObjectOfType(Type targetType, string nameFilter = null)
-        {
-            if (targetType == null) return null;
-            var all = Object.FindObjectsOfType(targetType);
-            if (all == null || all.Length == 0) return null;
-            if (string.IsNullOrEmpty(nameFilter)) return all[0];
-            foreach (var o in all)
-            {
-                var c = o as Component;
-                if (c != null && c.gameObject.name == nameFilter) return c;
-                if (o is GameObject go && go.name == nameFilter) return go;
-            }
-
-            return null;
-        }
-
-        static object InvokeStaticMethod(Type staticType, string methodName, Type expectedReturn)
-        {
-            try
-            {
-                var flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static;
-                var m = staticType.GetMethod(methodName, flags, null, Type.EmptyTypes, null);
-                if (m == null) return null;
-                var result = m.Invoke(null, null);
-                if (result == null) return null;
-                if (expectedReturn.IsAssignableFrom(result.GetType())) return result;
-                if (result is GameObject go && typeof(Object).IsAssignableFrom(expectedReturn))
-                {
-                    var comp = GetComponentByTypeOrInterface(go, expectedReturn);
-                    if (comp != null) return comp;
-                }
-            }
-            catch (Exception ex)
-            {
-                if (IsLogEnabled) Debug.LogError($"[Binder] Static method invoke error: {ex}");
-            }
-
-            return null;
-        }
-
-        static object InvokeInstanceMethod(object instance, string methodName, Type expectedReturn)
-        {
-            if (instance == null) return null;
-            try
-            {
-                var flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
-                var m = instance.GetType().GetMethod(methodName, flags, null, Type.EmptyTypes, null);
-                if (m == null) return null;
-                var result = m.Invoke(instance, null);
-                if (result == null) return null;
-                if (expectedReturn.IsAssignableFrom(result.GetType())) return result;
-                if (result is GameObject go && typeof(Object).IsAssignableFrom(expectedReturn))
-                {
-                    var comp = GetComponentByTypeOrInterface(go, expectedReturn);
-                    if (comp != null) return comp;
-                }
-            }
-            catch (Exception ex)
-            {
-                if (IsLogEnabled) Debug.LogError($"[Binder] Instance method invoke error: {ex}");
-            }
-
-            return null;
-        }
-
-        static object GetComponentByTypeOrInterface(GameObject go, Type type)
-        {
-            if (go == null || type == null) return null;
             if (type == typeof(GameObject)) return go;
             if (type == typeof(Transform)) return go.transform;
-            if (typeof(Component).IsAssignableFrom(type))
-            {
-                var comp = go.GetComponent(type);
-                if (comp != null) return comp;
 
-                // interface support: find any component implementing the interface
-                if (type.IsInterface)
+            // GetComponent(Type) của Unity cơ bản là Non-Alloc.
+            // Tuy nhiên với Interface, GetComponents(List) an toàn hơn.
+            if (type.IsInterface)
+            {
+                go.GetComponents(type, _sharedComponentList);
+                if (_sharedComponentList.Count > 0)
                 {
-                    foreach (var c in go.GetComponents<Component>())
-                    {
-                        if (type.IsAssignableFrom(c.GetType())) return c;
-                    }
+                    var res = _sharedComponentList[0];
+                    _sharedComponentList.Clear(); // Quan trọng: Clear ngay sau khi dùng
+                    return res;
                 }
-
-                // fallback to children
-                var found = go.GetComponentsInChildren<Component>(true)
-                    .FirstOrDefault(c => type.IsAssignableFrom(c.GetType()));
-                if (found != null) return found;
-            }
-
-            return null;
-        }
-
-        static object GetComponentInChildrenByTypeOrInterface(GameObject go, Type type, bool includeInactive)
-        {
-            if (go == null || type == null) return null;
-            if (type == typeof(GameObject))
-            {
-                var t = go.transform;
-                if (t.childCount > 0) return t.GetChild(0).gameObject;
                 return null;
             }
 
-            if (type == typeof(Transform))
-            {
-                return go.GetComponentsInChildren<Transform>(includeInactive).FirstOrDefault();
-            }
-
-            if (typeof(Component).IsAssignableFrom(type))
-            {
-                try
-                {
-                    var method = typeof(GameObject).GetMethod("GetComponentInChildren", new Type[] { typeof(Type), typeof(bool) });
-                    if (method != null)
-                    {
-                        var res = method.Invoke(go, new object[] { type, includeInactive });
-                        if (res != null) return res;
-                    }
-                }
-                catch
-                {
-                    /* fallback */
-                }
-
-                var comps = go.GetComponentsInChildren<Component>(includeInactive);
-                foreach (var c in comps)
-                {
-                    if (type.IsAssignableFrom(c.GetType())) return c;
-                }
-            }
-
-            return null;
+            return go.GetComponent(type);
         }
 
-        static object GetComponentInParentByTypeOrInterface(GameObject go, Type type)
+        static object GetComponentInChildrenNonAlloc(GameObject go, Type type, bool includeInactive)
         {
-            if (go == null || type == null) return null;
+            if (go == null) return null;
             if (type == typeof(GameObject)) return go;
-            if (type == typeof(Transform)) return go.transform.parent;
-            try
+
+            // FIX: Unity không hỗ trợ (Type, List). Ta dùng <Component> để lấy TẤT CẢ component.
+            // Điều này vẫn Zero-Alloc vì dùng List đệm, nhưng sẽ tốn CPU hơn xíu để duyệt list.
+            go.GetComponentsInChildren<Component>(includeInactive, _sharedComponentList);
+
+            Component result = null;
+            var count = _sharedComponentList.Count;
+            
+            for (int i = 0; i < count; i++)
             {
-                var method = typeof(GameObject).GetMethod("GetComponentInParent", new Type[] { typeof(Type) });
-                if (method != null)
+                var c = _sharedComponentList[i];
+                // Tự kiểm tra Type bằng tay
+                if (type.IsAssignableFrom(c.GetType()))
                 {
-                    var res = method.Invoke(go, new object[] { type });
-                    if (res != null) return res;
+                    result = c;
+                    break; // Tìm thấy cái đầu tiên thì dừng ngay
                 }
             }
-            catch
+
+            _sharedComponentList.Clear(); // Dọn sạch list ngay lập tức
+            return result;
+        }
+
+        static object GetComponentInParentNonAlloc(GameObject go, Type type)
+        {
+            if (go == null) return null;
+            if (type == typeof(GameObject)) return go;
+
+            // FIX: Tương tự như trên
+            go.GetComponentsInParent(true, _sharedComponentList);
+
+            Component result = null;
+            var count = _sharedComponentList.Count;
+
+            for (int i = 0; i < count; i++)
             {
-                /* fallback */
+                var c = _sharedComponentList[i];
+                if (type.IsAssignableFrom(c.GetType()))
+                {
+                    result = c;
+                    break;
+                }
             }
 
-            var t = go.transform.parent;
-            while (t != null)
-            {
-                var c = t.gameObject.GetComponent(type);
-                if (c != null) return c;
-                t = t.parent;
-            }
+            _sharedComponentList.Clear();
+            return result;
+        }
 
-            return null;
+        static object ExtractFromGameObject(GameObject go, Type desiredType)
+        {
+            if (go == null) return null;
+            if (desiredType == typeof(GameObject)) return go;
+            return GetComponentNonAlloc(go, desiredType);
         }
 
         #endregion
