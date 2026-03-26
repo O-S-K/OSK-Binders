@@ -20,7 +20,7 @@ namespace OSK.Bindings.Example
         public int LazyLoadBatch = 50;
 
         [Tooltip("Optional hard cap for total items (0 = no cap)")]
-        public int MaxModelItems = 0;
+        public int MaxModelItems = 0; // tương ứng với số lượng data mình muốn hiện thị
 
         [Tooltip("Default duration (seconds) used by JumpTo when duration field is empty/zero")]
         public float JumpDurationDefault = 0.5f;
@@ -35,8 +35,8 @@ namespace OSK.Bindings.Example
 
         public enum DataMode
         {
-            Observable,
-            PlainList
+            Observable, // khơỉ tạo dâata = Observable
+            PlainList // khởi tạo class ...
         }
 
         public DataMode Mode = DataMode.Observable;

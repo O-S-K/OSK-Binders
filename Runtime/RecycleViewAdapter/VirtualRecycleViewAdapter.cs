@@ -35,34 +35,45 @@ namespace OSK.Bindings
     public class VirtualRecycleViewAdapter<TModel, TView> : MonoBehaviour where TView : Component, IRecyclerItem<TModel>
     {
         [Title(" ------ Virtual Recycle View Adapter Settings ------ ", HorizontalLine = true)]
-        [ReadOnly, InfoBox("Not use Content Size Fitter and Layout Groups on Content RectTransform. " +
-                           "Item size and positions are managed by the adapter.", InfoMessageType.Warning), Space(10)]
+        [InfoBox("Not use Content Size Fitter and Layout Groups on Content RectTransform. " +
+                 "Item size and positions are managed by the adapter.", InfoMessageType.Warning)]
+        [Space(20)]
         [LabelText("Item Prefab")]
         [HorizontalGroup("Left", Width = 300)]
-        [PreviewField(50, ObjectFieldAlignment.Left), HideLabel]
+        [InlineEditor(InlineEditorModes.GUIOnly)]
+        [HideLabel]
+        [AssetsOnly]
         public TView ItemPrefab;
 
-        
-        [HorizontalGroup("Right/Row0", MarginLeft = 4)] // Xếp đẹp tí
-        [LabelText("Use Prefab Size")]
-        public bool UseChildSize = false; // <--- Biến bạn cần
+        public enum SizeMode
+        {
+            Manual,      /// Tự nhập tay cả hai
+            UsePrefabX,  /// Lấy X từ Prefab, Y nhập tay
+            UsePrefabY,  /// Lấy Y từ Prefab, X nhập tay
+            UsePrefabXY  /// Lấy cả hai từ Prefab
+        }
 
-        
-        [HorizontalGroup("Right/Row1")]
-        [LabelText("Item Width"), MinValue(1)]
-        [HideIf(nameof(UseChildSize))]
+
+        [Title("Size Settings")]
+        public SizeMode SizeOption = SizeMode.Manual;
+
+        [HorizontalGroup("SizeRow")]
+        [ShowIf(nameof(ShowWidthField))]
+        [LabelText("Width")]
         public float ItemWidth = 200f;
 
-        
-        [VerticalGroup("Right")]
-        [LabelWidth(90)]
-        [HorizontalGroup("Right/Row1", MarginLeft = 4)]
-        [LabelText("Item Height"), MinValue(1)]
-        [HideIf(nameof(UseChildSize))]
+        [HorizontalGroup("SizeRow")]
+        [ShowIf(nameof(ShowHeightField))]
+        [LabelText("Height")]
         public float ItemHeight = 100f;
 
+        private bool ShowWidthField => SizeOption == SizeMode.Manual || SizeOption == SizeMode.UsePrefabY;
+        private bool ShowHeightField => SizeOption == SizeMode.Manual || SizeOption == SizeMode.UsePrefabX;
+
         // ---------- Buffer / Prewarm on one line ----------
-        [HorizontalGroup("RowA", MarginLeft = 6, PaddingRight = 8)] [LabelWidth(90)] [LabelText("Buffer"), MinValue(0)]
+        [HorizontalGroup("RowA", MarginLeft = 6, PaddingRight = 8)]
+        [LabelWidth(90)] 
+        [LabelText("Buffer"), MinValue(0)]
         //buffer là số lượng item thêm vào trước và sau vùng nhìn thấy để tránh nhấp nháy khi cuộn nhanh
         public int Buffer = 2;
 
@@ -81,16 +92,17 @@ namespace OSK.Bindings
 
         [HorizontalGroup("RowC")] [LabelText("Spacing Y")]
         public float SpacingY = 0f;
-        
-                
+
+
         [Title(" ------ Jump Settings ------ ", HorizontalLine = true)]
-        [HorizontalGroup("RowD", MarginLeft = 6)] [LabelWidth(90)] [LabelText("Disable Input")]
+        [HorizontalGroup("RowD", MarginLeft = 6)]
+        [LabelWidth(90)]
+        [LabelText("Disable Input")]
         public bool DisableInputDuringJump = true;
 
         [HorizontalGroup("RowD")] [LabelText("Use Unscaled")]
         public bool JumpUseUnscaledTime = true;
 
-      
 
         [Title(" ------ Infinite Settings ------ ", HorizontalLine = true)]
         public bool IsInfinite = false; // Bật cái này lên để loop
@@ -143,17 +155,33 @@ namespace OSK.Bindings
         protected virtual void Awake()
         {
             _scrollDragState = GetComponent<ScrollDragState>();
-             if (UseChildSize)
-             {
-                 RectTransform prefabRect = ItemPrefab.GetComponent<RectTransform>();
-                 if (prefabRect != null)
-                 {
-                     ItemHeight = prefabRect.rect.height;
-                     ItemWidth = prefabRect.rect.width;
-                 }
-             }
+            UpdateSizesFromPrefab();
             if (ItemPrefab != null) _poolRecycleView = new PoolRecycleView<TView>(ItemPrefab, Content);
             enabled = true;
+        }
+        
+        private void UpdateSizesFromPrefab()
+        {
+            if (ItemPrefab == null || SizeOption == SizeMode.Manual) return;
+
+            RectTransform prefabRect = ItemPrefab.GetComponent<RectTransform>();
+            if (prefabRect == null) return;
+
+            switch (SizeOption)
+            {
+                case SizeMode.UsePrefabX:
+                    ItemWidth = prefabRect.rect.width;
+                    break;
+            
+                case SizeMode.UsePrefabY:
+                    ItemHeight = prefabRect.rect.height;
+                    break;
+            
+                case SizeMode.UsePrefabXY:
+                    ItemWidth = prefabRect.rect.width;
+                    ItemHeight = prefabRect.rect.height;
+                    break;
+            }
         }
 
 
@@ -161,7 +189,8 @@ namespace OSK.Bindings
         {
             PrewarmPool();
             ScrollRect.onValueChanged.AddListener(OnScroll);
-            ScrollRect.movementType = IsInfinite ? ScrollRect.MovementType.Unrestricted : ScrollRect.MovementType.Clamped;
+            ScrollRect.movementType =
+                IsInfinite ? ScrollRect.MovementType.Unrestricted : ScrollRect.MovementType.Clamped;
             UpdateContentSize();
             Refresh();
         }
@@ -197,7 +226,7 @@ namespace OSK.Bindings
             float indexAtCenterFloat = (currentScrollPos + scrollCenterOffset) / itemFull;
             int nearestIndex = Mathf.RoundToInt(indexAtCenterFloat);
             int targetIndex = nearestIndex;
-            
+
             if (!IsInfinite)
             {
                 int maxIndex = GetCount() - 1;
@@ -226,6 +255,7 @@ namespace OSK.Bindings
             {
                 targetIndex = Mathf.Clamp(targetIndex, 0, GetCount() - 1);
             }
+
             float targetScroll = (targetIndex * itemFull) - scrollCenterOffset;
 
             if (!IsInfinite)
@@ -237,7 +267,7 @@ namespace OSK.Bindings
 
             float snapDistance = Mathf.Abs(currentScrollPos - targetScroll);
 
-            if (snapDistance > 1f) 
+            if (snapDistance > 1f)
             {
                 float duration = Mathf.Clamp(snapDistance / (itemFull * SnapSpeed), 0.1f, 0.5f);
                 ScrollRect.velocity = Vector2.zero;
@@ -265,7 +295,7 @@ namespace OSK.Bindings
                             x =>
                             {
                                 Content.anchoredPosition =
-                                    new Vector2(-x, Content.anchoredPosition.y); 
+                                    new Vector2(-x, Content.anchoredPosition.y);
                                 ClampContentPosition();
                                 Refresh();
                             },
@@ -747,10 +777,10 @@ namespace OSK.Bindings
                 rt.pivot = new Vector2(0.5f, 1f);
 
                 float y = -index * (ItemHeight + SpacingY); // Đã cộng thêm SpacingY
-        
+
                 // X = 0 vì neo ở giữa, Y = vị trí tính toán
-                rt.anchoredPosition = new Vector2(0f, y); 
-        
+                rt.anchoredPosition = new Vector2(0f, y);
+
                 rt.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, ItemHeight);
                 rt.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, ItemWidth);
             }
@@ -762,9 +792,9 @@ namespace OSK.Bindings
                 rt.pivot = new Vector2(0f, 0.5f);
 
                 float x = index * (ItemWidth + SpacingX); // Đã cộng thêm SpacingX
-        
+
                 rt.anchoredPosition = new Vector2(x, 0f);
-        
+
                 rt.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, ItemWidth);
                 rt.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, ItemHeight); // <--- Quan trọng: Ép Height
             }

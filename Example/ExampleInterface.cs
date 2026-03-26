@@ -8,7 +8,7 @@ namespace OSK.Bindings.Example
     {
         void ExampleMethod();
     }
-    public class ExampleInterface :MonoBehaviour, IExampleInterface
+    public class ExampleInterface : MonoBehaviour, IExampleInterface
     {
         public void ExampleMethod()
         {
